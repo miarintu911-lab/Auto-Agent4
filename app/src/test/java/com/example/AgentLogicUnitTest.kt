@@ -2348,6 +2348,329 @@ class AgentLogicUnitTest {
         assertTrue(scrollHint.contains("SCROLL_UP ONCE"))
         assertTrue(scrollHint.contains("Bangla Unicode"))
     }
+
+    @Test
+    fun `carrom coach helper distinguishes watch training goal from autonomous self train`() {
+        assertTrue(com.example.game.CarromCoachHelper.isCarromWatchTrainGoal(com.example.game.CarromCoachHelper.CARROM_WATCH_TRAIN_GOAL))
+        assertTrue(com.example.game.CarromCoachHelper.isCarromWatchTrainGoal("আমি ক্যারাম খেলবো তুমি দেখে ট্রেনিং নাও"))
+        assertFalse(
+            com.example.game.CarromCoachHelper.isCarromWatchTrainGoal(
+                "Open Carrom game, research board rules, position striker with DRAG, and pot my coins cleanly."
+            )
+        )
+    }
+
+    @Test
+    fun `carrom watch trainer learns human pocket cut angle slider move and power into shot memory`() {
+        val board = com.example.game.CarromBoardLayout(
+            left = 60f,
+            top = 500f,
+            right = 1020f,
+            bottom = 1460f,
+            pockets = listOf(
+                com.example.game.Point2D(120f, 560f), // 0: top-left
+                com.example.game.Point2D(960f, 560f), // 1: top-right
+                com.example.game.Point2D(120f, 1400f), // 2: bottom-left
+                com.example.game.Point2D(960f, 1400f)  // 3: bottom-right
+            ),
+            baselineY = 1320f,
+            coinRadiusPx = 28f,
+            strikerRadiusPx = 35f,
+            pocketRadiusPx = 50f
+        )
+
+        val trainer = com.example.game.CarromWatchTrainer()
+        val targetWhite = com.example.game.CarromPiece(
+            color = com.example.game.CoinColor.WHITE,
+            center = com.example.game.Point2D(260f, 700f),
+            radiusPx = 28f
+        )
+        val otherBlack = com.example.game.CarromPiece(
+            color = com.example.game.CoinColor.BLACK,
+            center = com.example.game.Point2D(720f, 880f),
+            radiusPx = 28f
+        )
+        val initialStriker = com.example.game.CarromPiece(
+            color = com.example.game.CoinColor.STRIKER,
+            center = com.example.game.Point2D(540f, 1320f),
+            radiusPx = 35f
+        )
+        val slidStriker = initialStriker.copy(center = com.example.game.Point2D(410f, 1320f))
+
+        // Step 1: Turn starts centered, then human slides striker left to x=410
+        val u1 = trainer.processObservation(
+            obs = com.example.game.CarromWatchObservation(
+                board = board,
+                pieces = listOf(targetWhite, otherBlack, initialStriker),
+                striker = initialStriker,
+                sliderKnob = com.example.game.Point2D(540f, 1520f),
+                lumaDiff = 0f,
+                isInMotion = false,
+                isLikelyGameBoard = true
+            ),
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            isFreestyle = false,
+            nowMs = 1_000L
+        )
+        assertEquals(com.example.game.WatchTrainerPhase.ARMED_PRE_SHOT, u1.phase)
+
+        val u2 = trainer.processObservation(
+            obs = com.example.game.CarromWatchObservation(
+                board = board,
+                pieces = listOf(targetWhite, otherBlack, slidStriker),
+                striker = slidStriker,
+                sliderKnob = com.example.game.Point2D(410f, 1520f),
+                lumaDiff = 2.0f,
+                isInMotion = false,
+                isLikelyGameBoard = true
+            ),
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            isFreestyle = false,
+            nowMs = 1_400L
+        )
+        assertEquals(com.example.game.WatchTrainerPhase.ARMED_PRE_SHOT, u2.phase)
+
+        // Step 2: Human fires shot toward Top-Left targetWhite
+        val uMotion = trainer.processObservation(
+            obs = com.example.game.CarromWatchObservation(
+                board = board,
+                pieces = listOf(targetWhite, otherBlack),
+                striker = com.example.game.CarromPiece(
+                    color = com.example.game.CoinColor.STRIKER,
+                    center = com.example.game.Point2D(335f, 1010f),
+                    radiusPx = 35f
+                ),
+                sliderKnob = null,
+                lumaDiff = 22f,
+                isInMotion = true,
+                isLikelyGameBoard = true
+            ),
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            isFreestyle = false,
+            nowMs = 1_650L
+        )
+        assertEquals(com.example.game.WatchTrainerPhase.TRACKING_MOTION, uMotion.phase)
+
+        // Step 3: Coins settle (targetWhite is potted! only otherBlack remains + striker returns)
+        val stillSettled1 = com.example.game.CarromWatchObservation(
+            board = board,
+            pieces = listOf(otherBlack, initialStriker),
+            striker = initialStriker,
+            sliderKnob = com.example.game.Point2D(540f, 1520f),
+            lumaDiff = 1.5f,
+            isInMotion = false,
+            isLikelyGameBoard = true
+        )
+        // First still frame waits for confirmation
+        val uSettle1 = trainer.processObservation(
+            obs = stillSettled1,
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            isFreestyle = false,
+            nowMs = 2_300L
+        )
+        assertEquals(null, uSettle1.completedShot)
+
+        // Second still frame finalizes inference & feeds CarromMemoryData
+        val uSettle2 = trainer.processObservation(
+            obs = stillSettled1,
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            isFreestyle = false,
+            nowMs = 2_450L
+        )
+        val shot = uSettle2.completedShot
+        org.junit.Assert.assertNotNull(shot)
+        assertEquals(0, shot!!.pendingShot.pocketIndex) // Top-Left Pocket
+        assertEquals(com.example.game.CoinColor.WHITE, shot.pendingShot.targetCoinColor)
+        assertTrue(shot.pendingShot.movedStrikerWithSlider)
+        assertEquals(1, trainer.shotsObserved)
+        assertEquals(1, trainer.potsObserved)
+
+        val memEval = com.example.game.CarromShotMemoryStore.evaluateShotOutcome(
+            current = com.example.game.CarromMemoryData(),
+            pendingShot = shot.pendingShot,
+            postCounts = shot.postCounts,
+            lessonPrefix = "[Human Coach] "
+        )
+        assertEquals(com.example.game.CarromShotOutcomeType.POCKETED_MY_COIN, memEval.outcomeType)
+        assertTrue(memEval.learnedTacticLesson!!.startsWith("[Human Coach]"))
+        assertTrue(memEval.updatedMemory.placementStats.movedSuccesses == 1)
+        assertTrue(memEval.updatedMemory.confidenceBiasFor(0, shot.pendingShot.cutAngleDeg) > 0f)
+
+        // Step 4: False motion spike without moved coins must NOT record a bogus shot
+        trainer.processObservation(
+            obs = stillSettled1.copy(lumaDiff = 19f, isInMotion = true),
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            isFreestyle = false,
+            nowMs = 3_000L
+        )
+        trainer.processObservation(
+            obs = stillSettled1,
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            isFreestyle = false,
+            nowMs = 3_200L
+        )
+        val afterFalseSpike = trainer.processObservation(
+            obs = stillSettled1,
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            isFreestyle = false,
+            nowMs = 3_350L
+        )
+        assertEquals(null, afterFalseSpike.completedShot)
+        assertEquals(1, trainer.shotsObserved)
+    }
+
+    @Test
+    fun `carrom foul signature blacklists spatial shot in solver and physics simulator and prunes after clean pots`() {
+        val board = com.example.game.CarromBoardLayout(
+            left = 60f,
+            top = 500f,
+            right = 1020f,
+            bottom = 1460f,
+            pockets = listOf(
+                com.example.game.Point2D(120f, 560f), // P0 top-left
+                com.example.game.Point2D(960f, 560f), // P1 top-right
+                com.example.game.Point2D(120f, 1400f), // P2 bottom-left
+                com.example.game.Point2D(960f, 1400f)  // P3 bottom-right
+            ),
+            baselineY = 1320f,
+            coinRadiusPx = 28f,
+            strikerRadiusPx = 35f,
+            pocketRadiusPx = 50f
+        )
+
+        val whiteCoin = com.example.game.CarromPiece(
+            color = com.example.game.CoinColor.WHITE,
+            center = com.example.game.Point2D(260f, 700f),
+            radiusPx = 28f
+        )
+        val striker = com.example.game.CarromPiece(
+            color = com.example.game.CoinColor.STRIKER,
+            center = com.example.game.Point2D(540f, 1320f),
+            radiusPx = 35f
+        )
+
+        // First verify the baseline solver picks Top-Left Pocket (index 0) for whiteCoin
+        val baselineSol = com.example.game.CarromGeometrySolver.solveBestShot(
+            board = board,
+            pieces = listOf(whiteCoin, striker),
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            screenWidth = 1080,
+            screenHeight = 2400,
+            existingStriker = striker,
+            canRepositionStriker = false
+        )
+        org.junit.Assert.assertNotNull(baselineSol)
+        assertEquals(0, baselineSol!!.pocketIndex)
+
+        val (rowZone, colZone) = com.example.game.CarromMemoryData.coinZoneFor(whiteCoin.center, board)
+        val normStrikerX = ((striker.center.x - board.left) / board.width).coerceIn(0f, 1f)
+
+        // Record a foul on that exact spatial shot pattern across all power styles at MID sector (or exact power)
+        val foulRecord = com.example.game.PendingCarromShotRecord(
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            targetCoinColor = com.example.game.CoinColor.WHITE,
+            pocketIndex = baselineSol.pocketIndex,
+            cutAngleDeg = baselineSol.cutAngleDeg,
+            strikerNormalizedX = normStrikerX,
+            coinRowZone = rowZone,
+            coinColZone = colZone,
+            powerStyle = baselineSol.powerStyle,
+            movedStrikerWithSlider = false,
+            isBankShot = false,
+            isComboShot = false,
+            isBreakShot = false,
+            preCounts = com.example.game.BoardPieceCounts(myCount = 4, opponentCount = 4, queenCount = 0)
+        )
+        val foulEval = com.example.game.CarromShotMemoryStore.evaluateShotOutcome(
+            current = com.example.game.CarromMemoryData(),
+            pendingShot = foulRecord,
+            postCounts = com.example.game.BoardPieceCounts(myCount = 5, opponentCount = 4, queenCount = 0)
+        )
+        var mem = foulEval.updatedMemory
+        assertEquals(1, mem.blockedFoulCount())
+        assertTrue(
+            mem.isFoulBlacklisted(
+                board = board,
+                coinCenter = whiteCoin.center,
+                strikerPos = striker.center,
+                pocketIndex = baselineSol.pocketIndex,
+                cutAngleDeg = baselineSol.cutAngleDeg,
+                powerStyle = baselineSol.powerStyle
+            )
+        )
+        assertTrue(mem.formatForPrompt().contains("HARD-BLOCKED FOUL SIGNATURES"))
+
+        // Verify physics simulator directly rejects candidate matching that blacklisted foul signature
+        val blacklistedCandidate = com.example.game.RolloutCandidate(
+            strikerPos = striker.center,
+            baseDir = (baselineSol.ghostBall - striker.center).normalized(),
+            ghostBall = baselineSol.ghostBall,
+            targetCoin = whiteCoin,
+            targetPocket = board.pockets[0],
+            pocketIndex = 0,
+            cutAngleDeg = baselineSol.cutAngleDeg,
+            isBankShot = false,
+            isComboShot = false,
+            isBreakShot = false,
+            basePullMultiplier = when (baselineSol.powerStyle) {
+                com.example.game.CarromPowerStyle.SOFT -> 0.80f
+                com.example.game.CarromPowerStyle.MEDIUM -> 1.0f
+                com.example.game.CarromPowerStyle.HARD -> 1.25f
+            },
+            staticScore = 0.90f,
+            totalDistance = 750f
+        )
+        val simAfterFoul = com.example.game.CarromPhysicsSimulator.verifyAndRefineCandidates(
+            board = board,
+            pieces = listOf(whiteCoin, striker),
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            candidates = listOf(blacklistedCandidate),
+            shotMemory = mem,
+            matchCalibration = mem.matchCalibration
+        )
+        assertEquals(null, simAfterFoul)
+
+        // Verify solveBestShot NEVER selects the blocked (P0, MID, rowZone, colZone, cutAngle, powerStyle) direct shot!
+        val afterFoulSol = com.example.game.CarromGeometrySolver.solveBestShot(
+            board = board,
+            pieces = listOf(whiteCoin, striker),
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            screenWidth = 1080,
+            screenHeight = 2400,
+            existingStriker = striker,
+            canRepositionStriker = false,
+            shotMemory = mem
+        )
+        org.junit.Assert.assertNotNull(afterFoulSol)
+        assertFalse(
+            "Blacklisted foul shot (pocket=${afterFoulSol!!.pocketIndex}, power=${afterFoulSol.powerStyle}, break=${afterFoulSol.isBreakShot}) should not be chosen again",
+            !afterFoulSol.isBreakShot &&
+                afterFoulSol.pocketIndex == baselineSol.pocketIndex &&
+                afterFoulSol.powerStyle == baselineSol.powerStyle &&
+                com.example.game.CarromAngleBucket.fromAngle(afterFoulSol.cutAngleDeg) ==
+                com.example.game.CarromAngleBucket.fromAngle(baselineSol.cutAngleDeg)
+        )
+
+        // Record 3 clean pots on that same signature -> cleanSuccessCount (3) >= foulCount (1) + 2 -> prunes block automatically
+        repeat(3) {
+            mem = com.example.game.CarromShotMemoryStore.evaluateShotOutcome(
+                current = mem,
+                pendingShot = foulRecord,
+                postCounts = com.example.game.BoardPieceCounts(myCount = 3, opponentCount = 4, queenCount = 0)
+            ).updatedMemory
+        }
+        assertEquals(0, mem.blockedFoulCount())
+        assertFalse(
+            mem.isFoulBlacklisted(
+                board = board,
+                coinCenter = whiteCoin.center,
+                strikerPos = striker.center,
+                pocketIndex = baselineSol.pocketIndex,
+                cutAngleDeg = baselineSol.cutAngleDeg,
+                powerStyle = baselineSol.powerStyle
+            )
+        )
+    }
 }
 
 

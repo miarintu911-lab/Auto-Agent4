@@ -184,7 +184,24 @@ object CarromGeometrySolver {
                         continue
                     }
 
+                    val learnedPowerScale = shotMemory?.learnedPowerScaleFor(pocketIdx, cutAngleDeg) ?: 1.0f
+                    val matchPowerGain = shotMemory?.matchCalibration?.shotPowerGain ?: 1.0f
                     val isHanger = distCoinPocket <= board.coinRadiusPx * 5.2f
+                    val baseMult = if (isHanger) 0.85f else 1.0f
+                    val effectiveMult = baseMult * learnedPowerScale * matchPowerGain
+                    val candPowerStyle = CarromPowerStyle.fromPullMultiplier(effectiveMult)
+                    if (shotMemory?.isFoulBlacklisted(
+                            board = board,
+                            coinCenter = coin.center,
+                            strikerPos = strikerPos,
+                            pocketIndex = pocketIdx,
+                            cutAngleDeg = cutAngleDeg,
+                            powerStyle = candPowerStyle
+                        ) == true
+                    ) {
+                        continue
+                    }
+
                     val hangerBonus = if (isHanger) 0.16f else 0f
                     val queenBonus = if (coin.color == CoinColor.QUEEN) 0.09f else 0f
                     val angleScore = 1f - (cutAngleDeg / 66f) * 0.55f
@@ -196,11 +213,6 @@ object CarromGeometrySolver {
                     val heatmapPenalty = (shotMemory?.scratchHeatmap?.riskFor(pocketIdx, cutAngleDeg, normStrikerX) ?: 0f) * 0.35f
                     val score = (angleScore * 0.65f + distScore * 0.35f + queenBonus + hangerBonus + existingBonus + memoryBias - heatmapPenalty)
                         .coerceIn(0.05f, 1f)
-
-                    val learnedPowerScale = shotMemory?.learnedPowerScaleFor(pocketIdx, cutAngleDeg) ?: 1.0f
-                    val matchPowerGain = shotMemory?.matchCalibration?.shotPowerGain ?: 1.0f
-                    val baseMult = if (isHanger) 0.85f else 1.0f
-                    val effectiveMult = baseMult * learnedPowerScale * matchPowerGain
 
                     directPool.add(
                         RolloutCandidate(
@@ -449,6 +461,22 @@ object CarromGeometrySolver {
                     if (!clearCoinToPocket && !clearStrikerToGhost) continue
 
                     val isHanger = distCoinPocket <= board.coinRadiusPx * 5.2f
+                    val learnedScale = shotMemory?.learnedPowerScaleFor(pocketIdx, cutDeg) ?: 1.0f
+                    val matchPowerGain = shotMemory?.matchCalibration?.shotPowerGain ?: 1.0f
+                    val baseMult = (if (isHanger) 0.85f else 1.0f) * learnedScale
+                    val candPowerStyle = CarromPowerStyle.fromPullMultiplier(baseMult * matchPowerGain)
+                    if (shotMemory?.isFoulBlacklisted(
+                            board = board,
+                            coinCenter = coin.center,
+                            strikerPos = strikerPos,
+                            pocketIndex = pocketIdx,
+                            cutAngleDeg = cutDeg,
+                            powerStyle = candPowerStyle
+                        ) == true
+                    ) {
+                        continue
+                    }
+
                     val obstructionBias = if (clearCoinToPocket && clearStrikerToGhost) 0f else -0.18f
                     val queenBonus = if (coin.color == CoinColor.QUEEN) 0.09f else 0f
                     val hangerBonus = if (isHanger) 0.14f else 0f
@@ -456,8 +484,6 @@ object CarromGeometrySolver {
                     val distScore = 1f - ((distCoinPocket + distSg) / (board.width * 2.2f)).coerceIn(0f, 0.35f)
                     val score = (angleScore * 0.65f + distScore * 0.35f + queenBonus + hangerBonus + obstructionBias)
                         .coerceIn(0.05f, 1f)
-                    val learnedScale = shotMemory?.learnedPowerScaleFor(pocketIdx, cutDeg) ?: 1.0f
-                    val baseMult = (if (isHanger) 0.85f else 1.0f) * learnedScale
 
                     pool.add(
                         RolloutCandidate(
@@ -691,12 +717,25 @@ object CarromGeometrySolver {
                             continue
                         }
 
+                        val learnedScale = shotMemory?.learnedPowerScaleFor(pocketIdx, cutDeg) ?: 1.0f
+                        val effectiveMult = 1.24f * learnedScale
+                        val bankPowerStyle = CarromPowerStyle.fromPullMultiplier(effectiveMult)
+                        if (shotMemory?.isFoulBlacklisted(
+                                board = board,
+                                coinCenter = coin.center,
+                                strikerPos = strikerPos,
+                                pocketIndex = pocketIdx,
+                                cutAngleDeg = cutDeg,
+                                powerStyle = bankPowerStyle
+                            ) == true
+                        ) {
+                            continue
+                        }
+
                         val memoryBias = shotMemory?.confidenceBiasFor(pocketIdx, cutDeg) ?: 0f
                         val normStrikerX = ((strikerPos.x - board.left) / board.width).coerceIn(0f, 1f)
                         val heatmapPenalty = (shotMemory?.scratchHeatmap?.riskFor(pocketIdx, cutDeg, normStrikerX) ?: 0f) * 0.25f
                         val score = (0.64f - (cutDeg / 60f) * 0.25f + memoryBias * 0.6f - heatmapPenalty).coerceIn(0.05f, 0.72f)
-                        val learnedScale = shotMemory?.learnedPowerScaleFor(pocketIdx, cutDeg) ?: 1.0f
-                        val effectiveMult = 1.24f * learnedScale
 
                         outCandidates?.add(
                             RolloutCandidate(
@@ -819,6 +858,17 @@ object CarromGeometrySolver {
                             continue
                         }
                         if (willStrikerScratchIntoPocket(strikerPos, strikerGhost, dirSg, dirHg, entryCutDeg, board, extraScratchGuard)) {
+                            continue
+                        }
+                        if (shotMemory?.isFoulBlacklisted(
+                                board = board,
+                                coinCenter = finalCoin.center,
+                                strikerPos = strikerPos,
+                                pocketIndex = pocketIdx,
+                                cutAngleDeg = entryCutDeg,
+                                powerStyle = CarromPowerStyle.HARD
+                            ) == true
+                        ) {
                             continue
                         }
 

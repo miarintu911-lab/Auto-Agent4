@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -789,6 +790,235 @@ fun BackgroundAutoReplyQuickCard(
 }
 
 @Composable
+fun CarromWatchTrainCard(
+    isServiceActive: Boolean,
+    isRunningThisMode: Boolean,
+    isOtherTaskBusy: Boolean,
+    carromMemory: CarromMemoryData,
+    isLiveStreamActive: Boolean,
+    transferStatus: String? = null,
+    onStartTraining: () -> Unit,
+    onStopTraining: () -> Unit,
+    onExportTraining: () -> Unit = {},
+    onImportTraining: () -> Unit = {},
+    onDismissTransferStatus: () -> Unit = {}
+) {
+    val activeBorderColor by animateColorAsState(
+        targetValue = if (isRunningThisMode) ElectricCyan else SlateBorder,
+        animationSpec = tween(260),
+        label = "carromWatchTrainBorder"
+    )
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isRunningThisMode) CyberTealDark.copy(alpha = 0.42f) else SlateSurface
+        ),
+        border = BorderStroke(1.dp, activeBorderColor),
+        shape = MaterialTheme.shapes.large
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.School,
+                        contentDescription = null,
+                        tint = if (isRunningThisMode) ElectricCyan else CyberTeal,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.carrom_train_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                if (isRunningThisMode) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(CyberTealDark)
+                            .border(1.dp, ElectricCyan, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = if (isLiveStreamActive) "WATCH LIVE • 10FPS" else "WATCHING",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = ElectricCyan,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = stringResource(R.string.carrom_train_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+
+            val totalAttempts = carromMemory.statsByBucket.values.sumOf { it.attempts }
+            val totalPots = carromMemory.statsByBucket.values.sumOf { it.successes }
+            val blockedFouls = carromMemory.blockedFoulCount()
+            if (totalAttempts > 0 || carromMemory.matchCalibration.shotsThisMatch > 0 || blockedFouls > 0) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(SlateSurfaceElevated)
+                        .border(1.dp, SlateBorder, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "Learned: %d shots (%d pots) • Blocked Fouls: %d • Power %.2fx • Friction %.2fx".format(
+                            Locale.US,
+                            maxOf(totalAttempts, carromMemory.matchCalibration.shotsThisMatch),
+                            totalPots,
+                            blockedFouls,
+                            carromMemory.matchCalibration.shotPowerGain,
+                            carromMemory.matchCalibration.frictionScale
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = CyberTeal
+                    )
+                }
+            }
+
+            if (!transferStatus.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(CyberTealDark.copy(alpha = 0.55f))
+                        .border(1.dp, CyberTeal.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                        .clickable { onDismissTransferStatus() }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = transferStatus,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ElectricCyan,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = null,
+                        tint = TextSecondary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = {
+                    if (isRunningThisMode) onStopTraining() else onStartTraining()
+                },
+                enabled = isRunningThisMode || (isServiceActive && !isOtherTaskBusy),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .minimumInteractiveComponentSize()
+                    .height(50.dp)
+                    .testTag("btn_toggle_carrom_train"),
+                colors = if (isRunningThisMode) {
+                    ButtonDefaults.buttonColors(
+                        containerColor = CrimsonContainer,
+                        contentColor = CrimsonStop
+                    )
+                } else {
+                    ButtonDefaults.buttonColors(
+                        containerColor = CyberTealDark,
+                        contentColor = CyberTeal,
+                        disabledContainerColor = SlateSurfaceElevated,
+                        disabledContentColor = TextSecondary
+                    )
+                },
+                border = if (isRunningThisMode) null else BorderStroke(1.dp, CyberTeal.copy(alpha = 0.65f))
+            ) {
+                Icon(
+                    imageVector = if (isRunningThisMode) Icons.Rounded.Stop else Icons.Rounded.Visibility,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isRunningThisMode) {
+                        stringResource(R.string.action_stop_carrom_train)
+                    } else {
+                        stringResource(R.string.action_start_carrom_train)
+                    },
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onExportTraining,
+                    modifier = Modifier
+                        .weight(1f)
+                        .minimumInteractiveComponentSize()
+                        .height(48.dp)
+                        .testTag("btn_export_carrom_training"),
+                    border = BorderStroke(1.dp, CyberTeal.copy(alpha = 0.55f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Download,
+                        contentDescription = stringResource(R.string.cd_export_carrom_brain),
+                        tint = CyberTeal,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.action_export_carrom_brain),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = CyberTeal,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                OutlinedButton(
+                    onClick = onImportTraining,
+                    modifier = Modifier
+                        .weight(1f)
+                        .minimumInteractiveComponentSize()
+                        .height(48.dp)
+                        .testTag("btn_import_carrom_training"),
+                    border = BorderStroke(1.dp, SlateBorder)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.UploadFile,
+                        contentDescription = stringResource(R.string.cd_import_carrom_brain),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.action_import_carrom_brain),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun WorkingMemoryCard(memory: String) {
     if (memory.isBlank()) return
     Card(
@@ -1205,7 +1435,10 @@ fun AgentOutcomeBanner(
                         Spacer(modifier = Modifier.height(8.dp))
                         val stageColor = when (carromTurnHud.stage) {
                             TurnProbeStage.LOCKED_SURE_SHOT -> CyberTeal
-                            TurnProbeStage.CAROM_SURE_SHOT, TurnProbeStage.PROBING_SLIDER, TurnProbeStage.PRE_SCAN -> ElectricCyan
+                            TurnProbeStage.CAROM_SURE_SHOT,
+                            TurnProbeStage.PROBING_SLIDER,
+                            TurnProbeStage.PRE_SCAN,
+                            TurnProbeStage.WATCH_TRAINING -> ElectricCyan
                             TurnProbeStage.FALLBACK_FIRE -> AmberWarning
                         }
                         val clockColor = if (carromTurnHud.elapsedSec >= 5.5f) AmberWarning else CyberTeal
@@ -1214,31 +1447,60 @@ fun AgentOutcomeBanner(
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                             modifier = Modifier.testTag("carrom_turn_hud_row")
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(SlateSurfaceElevated)
-                                    .border(1.dp, clockColor.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = "CLOCK %.1fs / %.1fs".format(carromTurnHud.elapsedSec, carromTurnHud.maxSec),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = clockColor
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(SlateSurfaceElevated)
-                                    .border(1.dp, SlateBorder, RoundedCornerShape(8.dp))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = "PROBE ${carromTurnHud.probeNumber}/${carromTurnHud.maxProbes} • ${carromTurnHud.rejectedCount} REJ",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
+                            if (carromTurnHud.stage == TurnProbeStage.WATCH_TRAINING) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(SlateSurfaceElevated)
+                                        .border(1.dp, ElectricCyan.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "SHOTS ${carromTurnHud.probeNumber} LEARNED",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ElectricCyan
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(SlateSurfaceElevated)
+                                        .border(1.dp, SlateBorder, RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "${carromTurnHud.scanCount} POTS • ${carromTurnHud.rejectedCount} FOULS",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(SlateSurfaceElevated)
+                                        .border(1.dp, clockColor.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "CLOCK %.1fs / %.1fs".format(carromTurnHud.elapsedSec, carromTurnHud.maxSec),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = clockColor
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(SlateSurfaceElevated)
+                                        .border(1.dp, SlateBorder, RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "PROBE ${carromTurnHud.probeNumber}/${carromTurnHud.maxProbes} • ${carromTurnHud.rejectedCount} REJ",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
                             }
                             Box(
                                 modifier = Modifier

@@ -22,6 +22,16 @@ sealed interface CarromVisionOutcome {
     ) : CarromVisionOutcome
 }
 
+data class CarromWatchObservation(
+    val board: CarromBoardLayout,
+    val pieces: List<CarromPiece>,
+    val striker: CarromPiece?,
+    val sliderKnob: Point2D?,
+    val lumaDiff: Float,
+    val isInMotion: Boolean,
+    val isLikelyGameBoard: Boolean
+)
+
 /**
  * Pure Kotlin on-device Carrom screenshot analyzer + offline board-motion detector.
  * Zero native OpenCV bloat (~15-35ms per frame). Falls back cleanly to AI Vision
@@ -273,6 +283,135 @@ object CarromVisionDetector {
         )
         if (raw.isEmpty()) return null
         return CarromShotMemoryStore.countBoardPieces(raw, myCoinColor)
+    }
+
+    fun observeBoardForTraining(
+        screenshot: Bitmap?,
+        screenWidth: Int,
+        screenHeight: Int
+    ): CarromWatchObservation? {
+        if (screenshot == null || screenshot.width < 120 || screenshot.height < 120) return null
+
+        val scaleX = screenWidth.toFloat() / screenshot.width.toFloat()
+        val scaleY = screenHeight.toFloat() / screenshot.height.toFloat()
+        val bounds = estimateBoardBitmapBounds(screenshot)
+        val boardBmLeft = bounds.left
+        val boardBmTop = bounds.top
+        val boardBmRight = bounds.right
+        val boardBmBottom = bounds.bottom
+        val boardBmWidth = (boardBmRight - boardBmLeft).coerceAtLeast(40)
+        val boardBmHeight = (boardBmBottom - boardBmTop).coerceAtLeast(40)
+
+        val innerPadX = (boardBmWidth * 0.12f).toInt()
+        val motionTop = (boardBmTop + (boardBmHeight * 0.16f).toInt()).coerceIn(0, screenshot.height - 2)
+        val motionBottom = (boardBmTop + (boardBmHeight * 0.76f).toInt()).coerceIn(motionTop + 1, screenshot.height - 1)
+        val currentLuma = sampleBoardLumaGrid(
+            bitmap = screenshot,
+            left = (boardBmLeft + innerPadX).coerceIn(0, screenshot.width - 2),
+            top = motionTop,
+            right = (boardBmRight - innerPadX).coerceIn(1, screenshot.width - 1),
+            bottom = motionBottom
+        )
+        val prevLuma = previousBoardLuma
+        previousBoardLuma = currentLuma
+        val meanDiff = if (prevLuma != null) computeMeanAbsDiff(prevLuma, currentLuma) else 0f
+        val isInMotion = prevLuma != null && meanDiff > (MOTION_THRESHOLD * 0.90f)
+
+        val sliderKnobPx = detectBottomSliderKnob(
+            bitmap = screenshot,
+            boardLeft = boardBmLeft,
+            boardRight = boardBmRight,
+            boardBottom = boardBmBottom,
+            scaleX = scaleX,
+            scaleY = scaleY
+        )
+
+        val boardLeft = boardBmLeft * scaleX
+        val boardTop = boardBmTop * scaleY
+        val boardRight = boardBmRight * scaleX
+        val boardBottom = boardBmBottom * scaleY
+        val boardWidthPx = (boardRight - boardLeft).coerceAtLeast(100f)
+        val boardHeightPx = (boardBottom - boardTop).coerceAtLeast(100f)
+        val coinRadius = boardWidthPx * 0.029f
+        val strikerRadius = boardWidthPx * 0.036f
+        val pocketRadius = boardWidthPx * 0.052f
+        val pocketInset = boardWidthPx * 0.064f
+
+        val rawPieces = detectBoardPieces(
+            bitmap = screenshot,
+            left = boardBmLeft,
+            top = boardBmTop,
+            right = boardBmRight,
+            bottom = boardBmBottom,
+            scaleX = scaleX,
+            scaleY = scaleY,
+            expectedCoinRadiusPx = coinRadius,
+            useSubPixelRefinement = !isInMotion
+        )
+
+        val defaultBaselineY = boardTop + boardHeightPx * 0.845f
+        val contrastStriker = if (rawPieces.none { it.color == CoinColor.STRIKER }) {
+            detectAnyStrikerOnBaseline(
+                bitmap = screenshot,
+                boardLeft = boardBmLeft,
+                boardTop = boardBmTop,
+                boardRight = boardBmRight,
+                boardBottom = boardBmBottom,
+                scaleX = scaleX,
+                scaleY = scaleY,
+                strikerRadiusPx = strikerRadius,
+                sliderKnobPx = sliderKnobPx
+            )
+        } else {
+            null
+        }
+        val prelimStriker = contrastStriker ?: rawPieces.firstOrNull { it.color == CoinColor.STRIKER }
+        val cleanedPieces = if (prelimStriker != null) {
+            val clearR = strikerRadius * 1.40f
+            rawPieces.filter { p ->
+                p.color != CoinColor.STRIKER && (p.center - prelimStriker.center).length() > clearR
+            } + prelimStriker
+        } else {
+            rawPieces
+        }
+        val promoted = promoteOrAnchorStriker(
+            pieces = cleanedPieces,
+            baselineY = defaultBaselineY,
+            boardLeft = boardLeft,
+            boardRight = boardRight,
+            boardHeightPx = boardHeightPx,
+            strikerRadiusPx = strikerRadius,
+            sliderKnobPx = sliderKnobPx
+        )
+        val strikerPiece = promoted.firstOrNull { it.color == CoinColor.STRIKER }
+        val calibratedBaselineY = strikerPiece?.center?.y ?: defaultBaselineY
+        val pockets = listOf(
+            Point2D(boardLeft + pocketInset, boardTop + pocketInset),
+            Point2D(boardRight - pocketInset, boardTop + pocketInset),
+            Point2D(boardLeft + pocketInset, boardBottom - pocketInset),
+            Point2D(boardRight - pocketInset, boardBottom - pocketInset)
+        )
+        val boardLayout = CarromBoardLayout(
+            left = boardLeft,
+            top = boardTop,
+            right = boardRight,
+            bottom = boardBottom,
+            pockets = pockets,
+            baselineY = calibratedBaselineY,
+            coinRadiusPx = coinRadius,
+            strikerRadiusPx = strikerRadius,
+            pocketRadiusPx = pocketRadius
+        )
+        val nonStrikerCount = promoted.count { it.color != CoinColor.STRIKER }
+        return CarromWatchObservation(
+            board = boardLayout,
+            pieces = promoted,
+            striker = strikerPiece,
+            sliderKnob = sliderKnobPx,
+            lumaDiff = meanDiff,
+            isInMotion = isInMotion,
+            isLikelyGameBoard = nonStrikerCount >= 2
+        )
     }
 
     private data class BoardBmBounds(

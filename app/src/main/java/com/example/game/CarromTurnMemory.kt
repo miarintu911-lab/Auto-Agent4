@@ -8,7 +8,8 @@ enum class TurnProbeStage(val badge: String) {
     PROBING_SLIDER("PROBING"),
     LOCKED_SURE_SHOT("SURE SHOT"),
     CAROM_SURE_SHOT("CAROM SURE"),
-    FALLBACK_FIRE("6.4s BREAK/POT")
+    FALLBACK_FIRE("6.4s BREAK/POT"),
+    WATCH_TRAINING("WATCH TRAIN")
 }
 
 data class CarromTurnHudState(

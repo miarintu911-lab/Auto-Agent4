@@ -2,8 +2,10 @@ package com.example.ui
 
 import android.app.Application
 import android.content.Intent
+import android.net.Uri
 import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.example.agent.AgentCoordinator
 import com.example.agent.AgentExecutionMode
 import com.example.agent.AgentSettings
@@ -16,9 +18,11 @@ import com.example.game.CarromTurnHudState
 import com.example.service.LiveMediaProjectionCapturer
 import com.example.service.MediaProjectionCaptureService
 import com.example.service.TapPilotAccessibilityService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 data class GoalPreset(
     val title: String,
@@ -53,6 +57,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
     )
     val isAccessibilityEnabledInSettings: StateFlow<Boolean> =
         _isAccessibilityEnabledInSettings.asStateFlow()
+
+    private val _carromTransferStatus = MutableStateFlow<String?>(null)
+    val carromTransferStatus: StateFlow<String?> = _carromTransferStatus.asStateFlow()
 
     val quickPresets: List<GoalPreset> = listOf(
         GoalPreset(
@@ -119,6 +126,14 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         AgentCoordinator.startTask(bgGoal, AgentExecutionMode.CONTINUOUS_MONITOR)
     }
 
+    fun startCarromWatchTraining() {
+        refreshAccessibilityStatus()
+        val trainGoal = com.example.game.CarromCoachHelper.CARROM_WATCH_TRAIN_GOAL
+        _executionMode.value = AgentExecutionMode.CONTINUOUS_MONITOR
+        _goalText.value = trainGoal
+        AgentCoordinator.startTask(trainGoal, AgentExecutionMode.CONTINUOUS_MONITOR)
+    }
+
     fun pauseAgent() {
         AgentCoordinator.pauseTask()
     }
@@ -173,5 +188,46 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateSettings(transform: (AgentSettings) -> AgentSettings) {
         AgentCoordinator.updateSettings(transform)
+    }
+
+    fun exportCarromTrainingToUri(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                val json = AgentCoordinator.exportCarromTrainingJson()
+                val cr = getApplication<Application>().contentResolver
+                cr.openOutputStream(uri)?.use { stream ->
+                    stream.write(json.toByteArray(Charsets.UTF_8))
+                    stream.flush()
+                } ?: error("Unable to open destination file.")
+                val mem = carromMemory.value
+                val shots = maxOf(
+                    mem.statsByBucket.values.sumOf { it.attempts },
+                    mem.matchCalibration.shotsThisMatch
+                )
+                "Exported $shots shots & ${mem.blockedFoulCount()} blocked fouls (GitHub-ready JSON)!"
+            }
+            _carromTransferStatus.value = result.getOrElse { err ->
+                "Export failed: ${err.localizedMessage ?: "unknown error"}"
+            }
+        }
+    }
+
+    fun importCarromTrainingFromUri(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                val cr = getApplication<Application>().contentResolver
+                val raw = cr.openInputStream(uri)?.use { stream ->
+                    stream.bufferedReader(Charsets.UTF_8).readText()
+                } ?: error("Unable to read selected JSON file.")
+                AgentCoordinator.importCarromTrainingJson(raw).getOrThrow()
+            }
+            _carromTransferStatus.value = result.getOrElse { err ->
+                "Import failed: ${err.localizedMessage ?: "invalid JSON"}"
+            }
+        }
+    }
+
+    fun dismissCarromTransferStatus() {
+        _carromTransferStatus.value = null
     }
 }

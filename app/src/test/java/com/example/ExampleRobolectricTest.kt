@@ -1168,5 +1168,69 @@ class ExampleRobolectricTest {
         assertEquals(1100, parsedLeft.y)
         assertEquals(AgentActionType.SWIPE_RIGHT, parsedRight.actionType)
     }
+
+    @Test
+    fun `carrom training bundle json exports and imports foulSignatures memory and playbook cleanly`() {
+        val shot = com.example.game.PendingCarromShotRecord(
+            myCoinColor = com.example.game.CoinColor.WHITE,
+            targetCoinColor = com.example.game.CoinColor.WHITE,
+            pocketIndex = 2,
+            cutAngleDeg = 22f,
+            strikerNormalizedX = 0.25f,
+            coinRowZone = 1,
+            coinColZone = 2,
+            powerStyle = com.example.game.CarromPowerStyle.SOFT,
+            movedStrikerWithSlider = true,
+            isBankShot = false,
+            isComboShot = false,
+            isBreakShot = false,
+            preCounts = com.example.game.BoardPieceCounts(myCount = 4, opponentCount = 4, queenCount = 1),
+            timestampMs = 99999L
+        )
+        val memAfterFoul = com.example.game.CarromShotMemoryStore.evaluateShotOutcome(
+            current = com.example.game.CarromMemoryData(),
+            pendingShot = shot,
+            postCounts = com.example.game.BoardPieceCounts(myCount = 5, opponentCount = 4, queenCount = 1)
+        ).updatedMemory
+
+        val playbook = com.example.agent.TaskPlaybook(
+            topicKey = "carrom_board_game",
+            topicTitle = "Carrom Board Game",
+            rulesSummary = "Avoid striker scratch and pot clean corner cuts.",
+            winningStrategies = listOf("[Human Coach] Bottom-Left soft cut worked cleanly."),
+            foulLessons = listOf("[Human Coach] FOUL on Bottom-Left Pocket."),
+            trainingSessions = 4,
+            lastUpdatedMs = 123456L
+        )
+
+        val bundleJson = com.example.game.CarromShotMemoryStore.exportTrainingBundleJson(
+            memory = memAfterFoul,
+            carromPlaybook = playbook,
+            exportedAtMs = 555555L
+        )
+        val (parsedMem, parsedPb) = com.example.game.CarromShotMemoryStore.parseTrainingBundleJson(bundleJson)
+
+        assertEquals(1, parsedMem.blockedFoulCount())
+        org.junit.Assert.assertTrue(
+            parsedMem.isFoulBlacklisted(
+                pocketIndex = 2,
+                strikerNormalizedX = 0.25f,
+                coinRowZone = 1,
+                coinColZone = 2,
+                cutAngleDeg = 22f,
+                powerStyle = com.example.game.CarromPowerStyle.SOFT
+            )
+        )
+        assertEquals("carrom_board_game", parsedPb?.topicKey)
+        assertEquals(4, parsedPb?.trainingSessions)
+        assertEquals(1, parsedPb?.winningStrategies?.size)
+        assertEquals(1, parsedPb?.foulLessons?.size)
+
+        // Also supports raw CarromMemoryData JSON directly on import
+        val rawMemJson = com.example.game.CarromShotMemoryStore.serializeJson(memAfterFoul)
+        val (rawParsedMem, rawParsedPb) = com.example.game.CarromShotMemoryStore.parseTrainingBundleJson(rawMemJson)
+        assertEquals(1, rawParsedMem.blockedFoulCount())
+        assertEquals(null, rawParsedPb)
+    }
 }
 

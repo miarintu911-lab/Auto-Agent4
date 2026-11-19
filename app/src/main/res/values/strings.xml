@@ -129,4 +129,12 @@
     <string name="action_stop_bg_auto_reply">Background Service Active (Stop)</string>
     <string name="settings_floating_overlay_label">Floating On-Screen Overlay</string>
     <string name="settings_floating_overlay_desc">Show draggable Pause/Stop box over apps. Keep OFF (default) to show status and controls only in the notification panel without blocking the screen.</string>
+    <string name="carrom_train_title">Carrom Watch &amp; Learn Coach</string>
+    <string name="carrom_train_desc">Play a few Carrom matches yourself while TapPilot watches silently (0 touches), saves winning cut angles, striker positions, power &amp; friction feel, and applies them when playing autonomously.</string>
+    <string name="action_start_carrom_train">Start Watch &amp; Learn Training</string>
+    <string name="action_stop_carrom_train">Training Live — Stop Watch Mode</string>
+    <string name="action_export_carrom_brain">Export JSON (GitHub)</string>
+    <string name="action_import_carrom_brain">Import JSON</string>
+    <string name="cd_export_carrom_brain">Export learned Carrom training JSON for GitHub backup</string>
+    <string name="cd_import_carrom_brain">Import saved Carrom training JSON from device or GitHub</string>
 </resources>

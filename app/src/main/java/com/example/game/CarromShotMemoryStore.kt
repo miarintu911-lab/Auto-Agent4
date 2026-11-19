@@ -10,11 +10,15 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import com.example.agent.AgentKnowledgeStore
+import com.example.agent.TaskPlaybook
 import java.io.File
 import java.util.Locale
 
 private const val CARROM_MEMORY_FILE = "tappilot_carrom_memory.json"
+private const val CARROM_BUNDLE_FORMAT = "tappilot_carrom_training_bundle_v1"
 private const val MAX_RECENT_LESSONS = 16
+private const val MAX_FOUL_SIGNATURES = 250
 
 enum class CarromAngleBucket(val label: String) {
     STRAIGHT("Straight (0-14°)"),
@@ -162,16 +166,88 @@ data class MatchPhysicsCalibration(
     val shotsThisMatch: Int = 0
 )
 
+data class CarromFoulSignature(
+    val signatureKey: String,
+    val pocketIndex: Int,
+    val strikerSector: String,
+    val coinRowZone: Int,
+    val coinColZone: Int,
+    val angleBucket: CarromAngleBucket,
+    val powerStyle: CarromPowerStyle,
+    val foulCount: Int = 1,
+    val cleanSuccessCount: Int = 0,
+    val lastFoulMs: Long = 0L
+) {
+    fun isBlocked(): Boolean = foulCount >= 1 && foulCount > cleanSuccessCount
+}
+
 data class CarromMemoryData(
     val statsByBucket: Map<String, PocketShotStats> = emptyMap(),
     val placementStats: StrikerPlacementStats = StrikerPlacementStats(),
     val scratchHeatmap: ScratchZoneHeatmap = ScratchZoneHeatmap(),
     val matchCalibration: MatchPhysicsCalibration = MatchPhysicsCalibration(),
+    val foulSignatures: Map<String, CarromFoulSignature> = emptyMap(),
     val straightFoulCount: Int = 0,
     val recentTactics: List<String> = emptyList(),
     val recentFouls: List<String> = emptyList(),
     val lastUpdatedMs: Long = 0L
 ) {
+    fun blockedFoulCount(): Int = foulSignatures.values.count { it.isBlocked() }
+
+    fun isFoulBlacklisted(
+        board: CarromBoardLayout,
+        coinCenter: Point2D,
+        strikerPos: Point2D,
+        pocketIndex: Int,
+        cutAngleDeg: Float,
+        powerStyle: CarromPowerStyle
+    ): Boolean {
+        val (rowZone, colZone) = coinZoneFor(coinCenter, board)
+        val normStrikerX = ((strikerPos.x - board.left) / board.width).coerceIn(0f, 1f)
+        return isFoulBlacklisted(
+            pocketIndex = pocketIndex,
+            strikerNormalizedX = normStrikerX,
+            coinRowZone = rowZone,
+            coinColZone = colZone,
+            cutAngleDeg = cutAngleDeg,
+            powerStyle = powerStyle
+        )
+    }
+
+    fun isFoulBlacklisted(
+        pocketIndex: Int,
+        strikerNormalizedX: Float,
+        coinRowZone: Int,
+        coinColZone: Int,
+        cutAngleDeg: Float,
+        powerStyle: CarromPowerStyle
+    ): Boolean {
+        if (foulSignatures.isEmpty() || coinRowZone !in 0..3 || coinColZone !in 0..3) return false
+        val sector = strikerSectorFor(strikerNormalizedX)
+        val bucket = CarromAngleBucket.fromAngle(cutAngleDeg)
+        val exactKey = foulSignatureKey(
+            pocketIndex = pocketIndex,
+            strikerSector = sector,
+            coinRowZone = coinRowZone,
+            coinColZone = coinColZone,
+            angleBucket = bucket,
+            powerStyle = powerStyle
+        )
+        if (foulSignatures[exactKey]?.isBlocked() == true) {
+            return true
+        }
+        // If repeated spatial fouls (>= 2 net fouls) happen across powers at this exact board zone & cut bucket, block all powers.
+        var spatialFouls = 0
+        var spatialClean = 0
+        for (pwr in CarromPowerStyle.entries) {
+            val k = foulSignatureKey(pocketIndex, sector, coinRowZone, coinColZone, bucket, pwr)
+            foulSignatures[k]?.let { sig ->
+                spatialFouls += sig.foulCount
+                spatialClean += sig.cleanSuccessCount
+            }
+        }
+        return spatialFouls >= 2 && spatialFouls > spatialClean + 1
+    }
     fun statsFor(pocketIndex: Int, cutAngleDeg: Float): PocketShotStats? {
         val bucket = CarromAngleBucket.fromAngle(cutAngleDeg)
         return statsByBucket[bucketKey(pocketIndex, bucket)]
@@ -188,7 +264,7 @@ data class CarromMemoryData(
     fun needsExtraScratchGuard(): Boolean = straightFoulCount >= 1
 
     fun formatForPrompt(): String {
-        if (statsByBucket.isEmpty() && recentTactics.isEmpty() && recentFouls.isEmpty()) {
+        if (statsByBucket.isEmpty() && foulSignatures.isEmpty() && recentTactics.isEmpty() && recentFouls.isEmpty()) {
             return ""
         }
         val bestBuckets = statsByBucket.values
@@ -205,6 +281,13 @@ data class CarromMemoryData(
             .joinToString("\n") { st ->
                 "- AVOID ${pocketName(st.pocketIndex)} | ${st.angleBucket.label}: ${st.fouls} foul(s)"
             }
+        val blockedSigsText = foulSignatures.values
+            .filter { it.isBlocked() }
+            .sortedByDescending { it.foulCount }
+            .take(5)
+            .joinToString("\n") { sig ->
+                "- BLOCKED: ${pocketName(sig.pocketIndex)} | Striker=${sig.strikerSector} | Zone=(r${sig.coinRowZone},c${sig.coinColZone}) | ${sig.angleBucket.label} | ${sig.powerStyle.label} (${sig.foulCount} foul(s))"
+            }
         val placementNote = buildString {
             val ps = placementStats
             if (ps.movedAttempts + ps.inPlaceAttempts > 0) {
@@ -220,6 +303,7 @@ data class CarromMemoryData(
             "CARROM ADAPTIVE SHOT MEMORY (LEARNED FROM YOUR LIVE MATCHES):",
             bestBuckets.takeIf { it.isNotBlank() }?.let { "Best Pockets & Angles:\n$it" },
             foulBuckets.takeIf { it.isNotBlank() }?.let { "Known Foul Patterns:\n$it" },
+            blockedSigsText.takeIf { it.isNotBlank() }?.let { "HARD-BLOCKED FOUL SIGNATURES (NEVER SHOOT THESE):\n$it" },
             placementNote.takeIf { it.isNotBlank() },
             tacticsText.takeIf { it.isNotBlank() }?.let { "Recent Winning Adjustments:\n$it" },
             foulsText.takeIf { it.isNotBlank() }?.let { "Recent Foul/Power Warnings:\n$it" }
@@ -229,6 +313,31 @@ data class CarromMemoryData(
     companion object {
         fun bucketKey(pocketIndex: Int, bucket: CarromAngleBucket): String {
             return "P${pocketIndex.coerceIn(0, 3)}_${bucket.name}"
+        }
+
+        fun strikerSectorFor(strikerNormalizedX: Float): String = when {
+            strikerNormalizedX < 0.36f -> "LEFT"
+            strikerNormalizedX > 0.64f -> "RIGHT"
+            else -> "MID"
+        }
+
+        fun coinZoneFor(point: Point2D, board: CarromBoardLayout): Pair<Int, Int> {
+            val normX = ((point.x - board.left) / board.width).coerceIn(0f, 0.999f)
+            val normY = ((point.y - board.top) / board.height).coerceIn(0f, 0.999f)
+            val row = (normY * 4f).toInt().coerceIn(0, 3)
+            val col = (normX * 4f).toInt().coerceIn(0, 3)
+            return row to col
+        }
+
+        fun foulSignatureKey(
+            pocketIndex: Int,
+            strikerSector: String,
+            coinRowZone: Int,
+            coinColZone: Int,
+            angleBucket: CarromAngleBucket,
+            powerStyle: CarromPowerStyle
+        ): String {
+            return "P${pocketIndex.coerceIn(0, 3)}_${strikerSector}_R${coinRowZone.coerceIn(0, 3)}C${coinColZone.coerceIn(0, 3)}_${angleBucket.name}_${powerStyle.name}"
         }
 
         fun pocketName(pocketIndex: Int): String = when (pocketIndex) {
@@ -253,6 +362,8 @@ data class PendingCarromShotRecord(
     val pocketIndex: Int,
     val cutAngleDeg: Float,
     val strikerNormalizedX: Float = 0.5f,
+    val coinRowZone: Int = -1,
+    val coinColZone: Int = -1,
     val powerStyle: CarromPowerStyle,
     val movedStrikerWithSlider: Boolean,
     val isBankShot: Boolean,
@@ -306,6 +417,37 @@ class CarromShotMemoryStore(context: Context) {
         }
     }
 
+    suspend fun recordHumanTrainingShot(
+        pendingShot: PendingCarromShotRecord,
+        postCounts: BoardPieceCounts,
+        observedPowerHint: Float? = null
+    ): CarromEvaluationResult {
+        return mutex.withLock {
+            val evaluated = evaluateShotOutcome(
+                current = _memory.value,
+                pendingShot = pendingShot,
+                postCounts = postCounts,
+                lessonPrefix = "[Human Coach] "
+            )
+            val blendedMemory = if (
+                observedPowerHint != null &&
+                (evaluated.outcomeType == CarromShotOutcomeType.POCKETED_MY_COIN ||
+                    evaluated.outcomeType == CarromShotOutcomeType.POCKETED_QUEEN)
+            ) {
+                val cal = evaluated.updatedMemory.matchCalibration
+                val clampedHint = observedPowerHint.coerceIn(0.80f, 1.25f)
+                val newGain = ((cal.shotPowerGain * 0.85f) + (clampedHint * 0.15f)).coerceIn(0.78f, 1.28f)
+                evaluated.updatedMemory.copy(
+                    matchCalibration = cal.copy(shotPowerGain = newGain)
+                )
+            } else {
+                evaluated.updatedMemory
+            }
+            persistLocked(blendedMemory)
+            evaluated.copy(updatedMemory = blendedMemory)
+        }
+    }
+
     suspend fun updateSliderGain(observedRatio: Float) {
         val clamped = observedRatio.coerceIn(0.65f, 1.45f)
         mutex.withLock {
@@ -327,6 +469,12 @@ class CarromShotMemoryStore(context: Context) {
     suspend fun clearAll() {
         mutex.withLock {
             persistLocked(CarromMemoryData())
+        }
+    }
+
+    suspend fun replaceWithImported(memoryData: CarromMemoryData) {
+        mutex.withLock {
+            persistLocked(memoryData)
         }
     }
 
@@ -352,7 +500,8 @@ class CarromShotMemoryStore(context: Context) {
         fun evaluateShotOutcome(
             current: CarromMemoryData,
             pendingShot: PendingCarromShotRecord,
-            postCounts: BoardPieceCounts
+            postCounts: BoardPieceCounts,
+            lessonPrefix: String = ""
         ): CarromEvaluationResult {
             val pre = pendingShot.preCounts
             val myDelta = postCounts.myCount - pre.myCount
@@ -415,7 +564,7 @@ class CarromShotMemoryStore(context: Context) {
                         pendingShot.isFreestyle -> "${pendingShot.targetCoinColor.name} (Freestyle)"
                         else -> pendingShot.myCoinColor.name
                     }
-                    tacticLesson = "$pocketLabel ($shotKind, $powerLabel, $moveLabel) pocketed $potNoun cleanly!"
+                    tacticLesson = "${lessonPrefix}$pocketLabel ($shotKind, $powerLabel, $moveLabel) pocketed $potNoun cleanly!"
                     // Slightly reinforce working power scale toward current effective scale
                     if (pendingShot.movedStrikerWithSlider) {
                         ps.copy(
@@ -436,9 +585,9 @@ class CarromShotMemoryStore(context: Context) {
                         straightFouls += 1
                     }
                     foulLesson = if (pendingShot.isFreestyle) {
-                        "FOUL (Striker Scratch) on $pocketLabel ($shotKind, $powerLabel, $moveLabel): soften pull & verify striker scratch path."
+                        "${lessonPrefix}FOUL (Striker Scratch) on $pocketLabel ($shotKind, $powerLabel, $moveLabel): soften pull & verify striker scratch path."
                     } else {
-                        "FOUL on $pocketLabel ($shotKind, $powerLabel, $moveLabel): soften pull & verify striker scratch path."
+                        "${lessonPrefix}FOUL on $pocketLabel ($shotKind, $powerLabel, $moveLabel): soften pull & verify striker scratch path."
                     }
                     if (pendingShot.movedStrikerWithSlider) {
                         ps.copy(
@@ -469,7 +618,7 @@ class CarromShotMemoryStore(context: Context) {
                         } else {
                             "shoot softer so coin doesn't bounce out"
                         }
-                        foulLesson = "Missed $pocketLabel ($shotKind, $powerLabel) — auto-adjusting to $advice."
+                        foulLesson = "${lessonPrefix}Missed $pocketLabel ($shotKind, $powerLabel) — auto-adjusting to $advice."
                     }
                     if (pendingShot.movedStrikerWithSlider) {
                         ps.copy(movedAttempts = ps.movedAttempts + 1)
@@ -545,6 +694,65 @@ class CarromShotMemoryStore(context: Context) {
                 }
             }
 
+            val updatedFoulSignatures = current.foulSignatures.toMutableMap()
+            if (!pendingShot.isBreakShot && pendingShot.coinRowZone in 0..3 && pendingShot.coinColZone in 0..3) {
+                val sector = CarromMemoryData.strikerSectorFor(pendingShot.strikerNormalizedX)
+                val sigKey = CarromMemoryData.foulSignatureKey(
+                    pocketIndex = pocketIdx,
+                    strikerSector = sector,
+                    coinRowZone = pendingShot.coinRowZone,
+                    coinColZone = pendingShot.coinColZone,
+                    angleBucket = angleBucket,
+                    powerStyle = pendingShot.powerStyle
+                )
+                val existingSig = updatedFoulSignatures[sigKey]
+                when (outcomeType) {
+                    CarromShotOutcomeType.FOUL_SCRATCH_OR_PENALTY -> {
+                        val nextSig = if (existingSig != null) {
+                            existingSig.copy(
+                                foulCount = existingSig.foulCount + 1,
+                                lastFoulMs = pendingShot.timestampMs
+                            )
+                        } else {
+                            CarromFoulSignature(
+                                signatureKey = sigKey,
+                                pocketIndex = pocketIdx,
+                                strikerSector = sector,
+                                coinRowZone = pendingShot.coinRowZone,
+                                coinColZone = pendingShot.coinColZone,
+                                angleBucket = angleBucket,
+                                powerStyle = pendingShot.powerStyle,
+                                foulCount = 1,
+                                cleanSuccessCount = 0,
+                                lastFoulMs = pendingShot.timestampMs
+                            )
+                        }
+                        updatedFoulSignatures[sigKey] = nextSig
+                        if (updatedFoulSignatures.size > MAX_FOUL_SIGNATURES) {
+                            val trimmed = updatedFoulSignatures.values
+                                .sortedWith(
+                                    compareByDescending<CarromFoulSignature> { it.foulCount - it.cleanSuccessCount }
+                                        .thenByDescending { it.lastFoulMs }
+                                )
+                                .take(MAX_FOUL_SIGNATURES)
+                            updatedFoulSignatures.clear()
+                            trimmed.forEach { updatedFoulSignatures[it.signatureKey] = it }
+                        }
+                    }
+                    CarromShotOutcomeType.POCKETED_MY_COIN, CarromShotOutcomeType.POCKETED_QUEEN -> {
+                        if (existingSig != null) {
+                            val nextClean = existingSig.cleanSuccessCount + 1
+                            if (nextClean >= existingSig.foulCount + 2) {
+                                updatedFoulSignatures.remove(sigKey)
+                            } else {
+                                updatedFoulSignatures[sigKey] = existingSig.copy(cleanSuccessCount = nextClean)
+                            }
+                        }
+                    }
+                    CarromShotOutcomeType.MISSED_OR_NO_POT -> Unit
+                }
+            }
+
             val updatedMemory = current.copy(
                 statsByBucket = updatedMap,
                 placementStats = newPlacementStats,
@@ -555,6 +763,7 @@ class CarromShotMemoryStore(context: Context) {
                     shotPowerGain = newShotPowerGain,
                     shotsThisMatch = prevCal.shotsThisMatch + 1
                 ),
+                foulSignatures = updatedFoulSignatures,
                 straightFoulCount = straightFouls,
                 recentTactics = newTactics,
                 recentFouls = newFouls,
@@ -619,10 +828,28 @@ class CarromShotMemoryStore(context: Context) {
                 .put("sliderSamples", cal.sliderSamples)
                 .put("shotsThisMatch", cal.shotsThisMatch)
 
+            val foulSigsArray = JSONArray()
+            for (sig in data.foulSignatures.values) {
+                foulSigsArray.put(
+                    JSONObject()
+                        .put("signatureKey", sig.signatureKey)
+                        .put("pocketIndex", sig.pocketIndex)
+                        .put("strikerSector", sig.strikerSector)
+                        .put("coinRowZone", sig.coinRowZone)
+                        .put("coinColZone", sig.coinColZone)
+                        .put("angleBucket", sig.angleBucket.name)
+                        .put("powerStyle", sig.powerStyle.name)
+                        .put("foulCount", sig.foulCount)
+                        .put("cleanSuccessCount", sig.cleanSuccessCount)
+                        .put("lastFoulMs", sig.lastFoulMs)
+                )
+            }
+
             root.put("buckets", bucketsArray)
             root.put("placementStats", placementObj)
             root.put("scratchHeatmap", heatmapObj)
             root.put("matchCalibration", calObj)
+            root.put("foulSignatures", foulSigsArray)
             root.put("straightFoulCount", data.straightFoulCount)
             root.put("recentTactics", JSONArray(data.recentTactics))
             root.put("recentFouls", JSONArray(data.recentFouls))
@@ -699,16 +926,96 @@ class CarromShotMemoryStore(context: Context) {
                 MatchPhysicsCalibration()
             }
 
+            val foulSigsArr = root.optJSONArray("foulSignatures") ?: JSONArray()
+            val foulSigsMap = LinkedHashMap<String, CarromFoulSignature>()
+            for (i in 0 until foulSigsArr.length()) {
+                val obj = foulSigsArr.optJSONObject(i) ?: continue
+                val key = obj.optString("signatureKey").takeIf { it.isNotBlank() } ?: continue
+                val angleBucket = runCatching {
+                    CarromAngleBucket.valueOf(obj.optString("angleBucket", CarromAngleBucket.MEDIUM_CUT.name))
+                }.getOrDefault(CarromAngleBucket.MEDIUM_CUT)
+                val powerStyle = runCatching {
+                    CarromPowerStyle.valueOf(obj.optString("powerStyle", CarromPowerStyle.MEDIUM.name))
+                }.getOrDefault(CarromPowerStyle.MEDIUM)
+                foulSigsMap[key] = CarromFoulSignature(
+                    signatureKey = key,
+                    pocketIndex = obj.optInt("pocketIndex", 0).coerceIn(0, 3),
+                    strikerSector = obj.optString("strikerSector", "MID").ifBlank { "MID" },
+                    coinRowZone = obj.optInt("coinRowZone", 0).coerceIn(0, 3),
+                    coinColZone = obj.optInt("coinColZone", 0).coerceIn(0, 3),
+                    angleBucket = angleBucket,
+                    powerStyle = powerStyle,
+                    foulCount = obj.optInt("foulCount", 1).coerceAtLeast(0),
+                    cleanSuccessCount = obj.optInt("cleanSuccessCount", 0).coerceAtLeast(0),
+                    lastFoulMs = obj.optLong("lastFoulMs", 0L)
+                )
+            }
+
             return CarromMemoryData(
                 statsByBucket = map,
                 placementStats = placementStats,
                 scratchHeatmap = ScratchZoneHeatmap(heatmapMap),
                 matchCalibration = calibration,
+                foulSignatures = foulSigsMap,
                 straightFoulCount = root.optInt("straightFoulCount", 0).coerceAtLeast(0),
                 recentTactics = jsonList("recentTactics"),
                 recentFouls = jsonList("recentFouls"),
                 lastUpdatedMs = root.optLong("lastUpdatedMs", 0L)
             )
+        }
+
+        fun exportTrainingBundleJson(
+            memory: CarromMemoryData,
+            carromPlaybook: TaskPlaybook?,
+            exportedAtMs: Long = System.currentTimeMillis()
+        ): String {
+            val totalAttempts = maxOf(
+                memory.statsByBucket.values.sumOf { it.attempts },
+                memory.matchCalibration.shotsThisMatch
+            )
+            val totalPots = memory.statsByBucket.values.sumOf { it.successes }
+            val blockedFouls = memory.blockedFoulCount()
+
+            val root = JSONObject()
+                .put("format", CARROM_BUNDLE_FORMAT)
+                .put("exportedAtMs", exportedAtMs)
+                .put(
+                    "summary",
+                    JSONObject()
+                        .put("totalAttempts", totalAttempts)
+                        .put("totalPots", totalPots)
+                        .put("blockedFoulSignatures", blockedFouls)
+                )
+                .put("carromMemory", JSONObject(serializeJson(memory)))
+
+            if (carromPlaybook != null) {
+                val pbArr = JSONArray(AgentKnowledgeStore.serializePlaybooksJson(listOf(carromPlaybook)))
+                if (pbArr.length() > 0) {
+                    root.put("carromPlaybook", pbArr.getJSONObject(0))
+                }
+            }
+            return root.toString(2)
+        }
+
+        fun parseTrainingBundleJson(raw: String): Pair<CarromMemoryData, TaskPlaybook?> {
+            val trimmed = raw.trim()
+            if (trimmed.isBlank()) throw IllegalArgumentException("Empty Carrom JSON file.")
+            val root = JSONObject(trimmed)
+            return if (root.has("carromMemory")) {
+                val memObj = root.getJSONObject("carromMemory")
+                val mem = parseJson(memObj.toString())
+                val pbObj = root.optJSONObject("carromPlaybook")
+                val pb = if (pbObj != null) {
+                    AgentKnowledgeStore.parsePlaybooksJson(JSONArray().put(pbObj).toString()).firstOrNull()
+                } else {
+                    null
+                }
+                mem to pb
+            } else if (root.has("buckets") || root.has("foulSignatures") || root.has("matchCalibration")) {
+                parseJson(trimmed) to null
+            } else {
+                throw IllegalArgumentException("File is not a valid TapPilot Carrom training JSON.")
+            }
         }
     }
 }

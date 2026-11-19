@@ -58,6 +58,7 @@ import com.example.agent.AgentStepLog
 import com.example.agent.AgentUiState
 import com.example.agent.ContactProfile
 import com.example.agent.NotificationReplyHelper
+import com.example.game.CarromCoachHelper
 import com.example.ui.theme.CyberTeal
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.ObsidianBg
@@ -80,6 +81,7 @@ fun DashboardScreen(viewModel: AgentViewModel) {
     val playbooks by viewModel.playbooks.collectAsStateWithLifecycle()
     val cachedActions by viewModel.cachedActions.collectAsStateWithLifecycle()
     val contacts by viewModel.contacts.collectAsStateWithLifecycle()
+    val carromTransferStatus by viewModel.carromTransferStatus.collectAsStateWithLifecycle()
 
     var showSettingsSheet by rememberSaveable { mutableStateOf(false) }
     var showContactDialog by remember { mutableStateOf(false) }
@@ -87,6 +89,23 @@ fun DashboardScreen(viewModel: AgentViewModel) {
     var autoRequestedProjectionThisSession by rememberSaveable { mutableStateOf(false) }
     var launchPendingAfterProjection by remember { mutableStateOf(false) }
     var pendingBgAutoReplyLaunch by remember { mutableStateOf(false) }
+    var pendingCarromTrainLaunch by remember { mutableStateOf(false) }
+
+    val carromExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.exportCarromTrainingToUri(uri)
+        }
+    }
+
+    val carromImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importCarromTrainingFromUri(uri)
+        }
+    }
 
     val mediaProjectionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -95,7 +114,10 @@ fun DashboardScreen(viewModel: AgentViewModel) {
         if (result.resultCode == Activity.RESULT_OK && data != null) {
             viewModel.startLiveProjection(result.resultCode, data)
         }
-        if (launchPendingAfterProjection) {
+        if (pendingCarromTrainLaunch) {
+            pendingCarromTrainLaunch = false
+            viewModel.startCarromWatchTraining()
+        } else if (launchPendingAfterProjection) {
             launchPendingAfterProjection = false
             viewModel.launchAgent()
         }
@@ -119,14 +141,35 @@ fun DashboardScreen(viewModel: AgentViewModel) {
         viewModel.launchAgent()
     }
 
+    fun proceedWithCarromTrainOrProjection() {
+        if (!isLiveStreamActive && !autoRequestedProjectionThisSession) {
+            val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+            if (manager != null) {
+                autoRequestedProjectionThisSession = true
+                pendingCarromTrainLaunch = true
+                mediaProjectionLauncher.launch(manager.createScreenCaptureIntent())
+                return
+            }
+        }
+        pendingCarromTrainLaunch = false
+        viewModel.startCarromWatchTraining()
+    }
+
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ ->
-        if (pendingBgAutoReplyLaunch) {
-            pendingBgAutoReplyLaunch = false
-            viewModel.startBackgroundNotificationAutoReply()
-        } else {
-            proceedWithLaunchOrProjection()
+        when {
+            pendingBgAutoReplyLaunch -> {
+                pendingBgAutoReplyLaunch = false
+                viewModel.startBackgroundNotificationAutoReply()
+            }
+            pendingCarromTrainLaunch -> {
+                pendingCarromTrainLaunch = false
+                proceedWithCarromTrainOrProjection()
+            }
+            else -> {
+                proceedWithLaunchOrProjection()
+            }
         }
     }
 
@@ -177,6 +220,21 @@ fun DashboardScreen(viewModel: AgentViewModel) {
             }
         }
         viewModel.startBackgroundNotificationAutoReply()
+    }
+
+    fun handleStartCarromTrainClick() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                pendingCarromTrainLaunch = true
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
+            }
+        }
+        proceedWithCarromTrainOrProjection()
     }
 
     fun toggleLiveStream() {
@@ -287,6 +345,30 @@ fun DashboardScreen(viewModel: AgentViewModel) {
                         isOtherTaskBusy = isOtherTaskBusy,
                         onStartBgAutoReply = ::handleStartBgAutoReplyClick,
                         onStopBgAutoReply = viewModel::stopAgent
+                    )
+                }
+
+                item {
+                    val isCarromTrainRunning = (agentState is AgentUiState.Running &&
+                        CarromCoachHelper.isCarromWatchTrainGoal((agentState as AgentUiState.Running).goal)) ||
+                        (agentState is AgentUiState.Paused &&
+                            CarromCoachHelper.isCarromWatchTrainGoal((agentState as AgentUiState.Paused).goal))
+                    val isOtherTaskBusyForTrain = !isCarromTrainRunning &&
+                        (agentState is AgentUiState.Running ||
+                            agentState is AgentUiState.Paused ||
+                            agentState is AgentUiState.AwaitingConfirmation)
+                    CarromWatchTrainCard(
+                        isServiceActive = serviceActive,
+                        isRunningThisMode = isCarromTrainRunning,
+                        isOtherTaskBusy = isOtherTaskBusyForTrain,
+                        carromMemory = carromMemory,
+                        isLiveStreamActive = isLiveStreamActive,
+                        transferStatus = carromTransferStatus,
+                        onStartTraining = ::handleStartCarromTrainClick,
+                        onStopTraining = viewModel::stopAgent,
+                        onExportTraining = { carromExportLauncher.launch("tappilot-carrom-brain.json") },
+                        onImportTraining = { carromImportLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
+                        onDismissTransferStatus = viewModel::dismissCarromTransferStatus
                     )
                 }
 

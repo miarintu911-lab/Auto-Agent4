@@ -107,12 +107,24 @@ object CarromPhysicsSimulator {
         if (candidates.isEmpty() || board.pockets.size < 4) return null
 
         val startNs = System.nanoTime()
-        val topCandidates = candidates
+        val shotPowerGain = matchCalibration?.shotPowerGain ?: 1.0f
+        val safeCandidates = candidates.filterNot { cand ->
+            !cand.isBreakShot && shotMemory?.isFoulBlacklisted(
+                board = board,
+                coinCenter = cand.targetCoin.center,
+                strikerPos = cand.strikerPos,
+                pocketIndex = cand.pocketIndex,
+                cutAngleDeg = cand.cutAngleDeg,
+                powerStyle = CarromPowerStyle.fromPullMultiplier(cand.basePullMultiplier * shotPowerGain)
+            ) == true
+        }
+        if (safeCandidates.isEmpty()) return null
+
+        val topCandidates = safeCandidates
             .sortedByDescending { it.staticScore }
             .take(8)
 
         val frictionScale = matchCalibration?.frictionScale ?: 1.0f
-        val shotPowerGain = matchCalibration?.shotPowerGain ?: 1.0f
         val jawSafetyBuffer = matchCalibration?.pocketJawSafetyBuffer ?: 0f
         val extraScratchGuard = shotMemory?.needsExtraScratchGuard() == true
 
@@ -333,9 +345,21 @@ object CarromPhysicsSimulator {
         val jawSafetyBuffer = matchCalibration?.pocketJawSafetyBuffer ?: 0f
         val extraScratchGuard = shotMemory?.needsExtraScratchGuard() == true
 
+        val safeCandidates = candidates.filterNot { cand ->
+            !cand.isBreakShot && shotMemory?.isFoulBlacklisted(
+                board = board,
+                coinCenter = cand.targetCoin.center,
+                strikerPos = cand.strikerPos,
+                pocketIndex = cand.pocketIndex,
+                cutAngleDeg = cand.cutAngleDeg,
+                powerStyle = CarromPowerStyle.fromPullMultiplier(cand.basePullMultiplier * shotPowerGain)
+            ) == true
+        }
+        if (safeCandidates.isEmpty()) return emptyList()
+
         // Keep top 2 static candidates per distinct quantized X bucket (every 18px) for fast rollout evaluation
         val bucketBest = LinkedHashMap<Int, List<RolloutCandidate>>()
-        val sortedByStatic = candidates.sortedByDescending { it.staticScore }
+        val sortedByStatic = safeCandidates.sortedByDescending { it.staticScore }
         for (cand in sortedByStatic) {
             val bucketKey = (cand.strikerPos.x / 18f).toInt()
             val list = bucketBest[bucketKey] ?: emptyList()

@@ -6,6 +6,7 @@ import android.util.Log
 import com.example.ai.ApiKeyFailoverManager
 import com.example.ai.GeminiAiPlanner
 import com.example.game.BoardPieceCounts
+import com.example.game.CarromCoachHelper
 import com.example.game.CarromGeometrySolver
 import com.example.game.CarromMemoryData
 import com.example.game.CarromPowerStyle
@@ -14,6 +15,7 @@ import com.example.game.CarromTurnHudState
 import com.example.game.CarromTurnMemory
 import com.example.game.CarromVisionDetector
 import com.example.game.CarromVisionOutcome
+import com.example.game.CarromWatchTrainer
 import com.example.game.CoinColor
 import com.example.game.PendingCarromShotRecord
 import com.example.game.TurnProbeStage
@@ -213,6 +215,36 @@ object AgentCoordinator {
         ApiKeyFailoverManager.resetHealth()
     }
 
+    fun exportCarromTrainingJson(): String {
+        val currentMem = _carromMemory.value
+        val carromPb = _playbooks.value.firstOrNull {
+            AgentKnowledgeStore.normalizeKey(it.topicKey) == "carrom_board_game"
+        } ?: knowledgeStore?.findMatchingPlaybook("carrom")
+        return CarromShotMemoryStore.exportTrainingBundleJson(
+            memory = currentMem,
+            carromPlaybook = carromPb
+        )
+    }
+
+    suspend fun importCarromTrainingJson(raw: String): Result<String> {
+        return runCatching {
+            val (importedMem, importedPb) = CarromShotMemoryStore.parseTrainingBundleJson(raw)
+            val memStore = carromShotMemoryStore
+                ?: error("Carrom memory store is not initialized yet.")
+            memStore.replaceWithImported(importedMem)
+            if (importedPb != null) {
+                knowledgeStore?.saveOrMergePlaybook(importedPb)
+            }
+            val totalShots = maxOf(
+                importedMem.statsByBucket.values.sumOf { it.attempts },
+                importedMem.matchCalibration.shotsThisMatch
+            )
+            val totalPots = importedMem.statsByBucket.values.sumOf { it.successes }
+            val blockedFouls = importedMem.blockedFoulCount()
+            "Imported $totalShots shots ($totalPots pots, $blockedFouls blocked fouls)!"
+        }
+    }
+
     fun startTask(
         goalInput: String,
         mode: AgentExecutionMode = AgentExecutionMode.SINGLE_SESSION
@@ -283,6 +315,7 @@ object AgentCoordinator {
                     packageName = "",
                     playbookTopicKey = activePlaybook?.topicKey
                 )
+                val isCarromWatchTrainMode = CarromCoachHelper.isCarromWatchTrainGoal(goal)
 
                 val isNotifAutoReplyAtStart = NotificationReplyHelper.isNotificationDrivenAutoReplyGoal(
                     goal = goal,
@@ -411,6 +444,23 @@ object AgentCoordinator {
                 var completionGuardOverrides = 0
                 var directLaunchedTargetKey: String? = null
                 val historyScrolledPeers = mutableSetOf<String>()
+                val carromWatchTrainer = CarromWatchTrainer()
+                var lastWatchUiUpdateMs = 0L
+                var lastWatchHudDetail = ""
+                if (isCarromWatchTrainMode) {
+                    appendTrace(
+                        trace,
+                        AgentStepLog(
+                            stepNumber = 0,
+                            timestampMs = System.currentTimeMillis(),
+                            actionType = AgentActionType.WAIT,
+                            targetSummary = "Watch & Learn Coach Active",
+                            reason = "Observing your live Carrom shots silently (0 touches, 0 API calls) to calibrate angles, power & tactics.",
+                            status = StepStatus.COMPLETED,
+                            requiresConfirmation = false
+                        )
+                    )
+                }
                 CarromVisionDetector.resetMotionHistory()
 
                 while (maxStepsLimit == null || step <= maxStepsLimit) {
@@ -564,7 +614,7 @@ object AgentCoordinator {
                         trace = trace.toList()
                     )
 
-                    val snapshot = service.captureSnapshot(currentSettings.useVisionScreenshot)
+                    val snapshot = service.captureSnapshot(currentSettings.useVisionScreenshot || isCarromWatchTrainMode)
 
                     val currentSig = ActionCacheStore.computeScreenSignature(snapshot.nodes)
                     val currentCompositeScreen = "${snapshot.packageName}::$currentSig"
@@ -645,6 +695,129 @@ object AgentCoordinator {
                         snapshot.packageName == "com.android.systemui"
                     val isLikelyCarromLobby = isCarromContext && (isNonGameApp || CarromContextHelper.isLikelyGameLobbyMenu(snapshot.nodes))
                     val isActiveCarromMatchScreen = isCarromContext && !isNonGameApp && !isLikelyCarromLobby
+
+                    if (isCarromWatchTrainMode) {
+                        val effectiveRuleWatch = resolveCarromRuleMode(goal, currentSettings.carromRuleMode)
+                        val isFreestyleWatch = effectiveRuleWatch == CarromRuleMode.FREESTYLE
+                        val watchCoinColor = if (effectiveRuleWatch == CarromRuleMode.BLACK_ONLY) CoinColor.BLACK else CoinColor.WHITE
+
+                        if (!isActiveCarromMatchScreen || snapshot.screenshot == null) {
+                            snapshot.screenshot?.recycle()
+                            val statusMsg = if (snapshot.screenshot == null) {
+                                "Watch & Learn waiting for screen capture — enable Live Stream or Screenshot Vision."
+                            } else {
+                                "Watch & Learn ready (${carromWatchTrainer.shotsObserved} shots learned) — start a Carrom match & play normally!"
+                            }
+                            _carromTurnHud.value = CarromTurnHudState(
+                                isActive = true,
+                                elapsedSec = 0f,
+                                maxSec = 0f,
+                                probeNumber = carromWatchTrainer.shotsObserved,
+                                maxProbes = 99,
+                                scanCount = carromWatchTrainer.potsObserved,
+                                rejectedCount = carromWatchTrainer.foulsObserved,
+                                stage = TurnProbeStage.WATCH_TRAINING,
+                                detail = statusMsg.take(64)
+                            )
+                            _uiState.value = AgentUiState.Running(
+                                goal = goal,
+                                mode = mode,
+                                currentStep = step,
+                                maxSteps = maxStepsLimit,
+                                phase = AgentPhase.OBSERVING,
+                                lastThought = statusMsg,
+                                workingMemory = workingMemory,
+                                trace = trace.toList()
+                            )
+                            delay(550L)
+                            step++
+                            continue
+                        }
+
+                        val watchObs = CarromVisionDetector.observeBoardForTraining(
+                            screenshot = snapshot.screenshot,
+                            screenWidth = snapshot.screenWidth,
+                            screenHeight = snapshot.screenHeight
+                        )
+                        snapshot.screenshot?.recycle()
+
+                        val watchUpdate = carromWatchTrainer.processObservation(
+                            obs = watchObs,
+                            myCoinColor = watchCoinColor,
+                            isFreestyle = isFreestyleWatch,
+                            nowMs = System.currentTimeMillis()
+                        )
+                        val completed = watchUpdate.completedShot
+                        if (completed != null) {
+                            val eval = carromShotMemoryStore?.recordHumanTrainingShot(
+                                pendingShot = completed.pendingShot,
+                                postCounts = completed.postCounts,
+                                observedPowerHint = completed.observedPowerHint
+                            )
+                            if (eval != null) {
+                                if (eval.learnedTacticLesson != null || eval.learnedFoulLesson != null) {
+                                    val pbKey = activePlaybook?.topicKey ?: "carrom_board_game"
+                                    val updatedPb = knowledgeStore?.recordStepLearning(
+                                        topicKey = pbKey,
+                                        fallbackTopicTitle = activePlaybook?.topicTitle ?: "Carrom Board Game",
+                                        newStrategy = eval.learnedTacticLesson,
+                                        newFoulLesson = eval.learnedFoulLesson
+                                    )
+                                    if (updatedPb != null) {
+                                        activePlaybook = updatedPb
+                                    }
+                                }
+                                workingMemory = "Watch & Learn (#${carromWatchTrainer.shotsObserved}): ${completed.humanInsightSummary} -> ${eval.outcomeType.name}"
+                                appendTrace(
+                                    trace,
+                                    AgentStepLog(
+                                        stepNumber = step,
+                                        timestampMs = System.currentTimeMillis(),
+                                        actionType = AgentActionType.WAIT,
+                                        targetSummary = "Trained Shot #${carromWatchTrainer.shotsObserved}: ${eval.outcomeType.name}",
+                                        reason = "${completed.humanInsightSummary} | ${eval.summaryMessage}",
+                                        status = StepStatus.COMPLETED,
+                                        requiresConfirmation = false
+                                    )
+                                )
+                            }
+                        }
+
+                        val nowWatchMs = System.currentTimeMillis()
+                        val shouldPublishUi = completed != null ||
+                            watchUpdate.hudStatusText != lastWatchHudDetail ||
+                            (nowWatchMs - lastWatchUiUpdateMs >= 650L)
+
+                        if (shouldPublishUi) {
+                            lastWatchUiUpdateMs = nowWatchMs
+                            lastWatchHudDetail = watchUpdate.hudStatusText
+                            _carromTurnHud.value = CarromTurnHudState(
+                                isActive = true,
+                                elapsedSec = 0f,
+                                maxSec = 0f,
+                                probeNumber = carromWatchTrainer.shotsObserved,
+                                maxProbes = 99,
+                                scanCount = carromWatchTrainer.potsObserved,
+                                rejectedCount = carromWatchTrainer.foulsObserved,
+                                stage = TurnProbeStage.WATCH_TRAINING,
+                                detail = watchUpdate.hudStatusText.take(64)
+                            )
+                            _uiState.value = AgentUiState.Running(
+                                goal = goal,
+                                mode = mode,
+                                currentStep = step,
+                                maxSteps = maxStepsLimit,
+                                phase = AgentPhase.OBSERVING,
+                                lastThought = watchUpdate.hudStatusText,
+                                workingMemory = workingMemory,
+                                trace = trace.toList()
+                            )
+                        }
+                        val watchDelayMs = if (LiveMediaProjectionCapturer.isLiveActive.value) 100L else 420L
+                        delay(watchDelayMs)
+                        step++
+                        continue
+                    }
 
                     val chatObs = ChatTurnGuard.extractChatObservation(
                         snapshot = snapshot,
@@ -1176,6 +1349,7 @@ object AgentCoordinator {
                                         val shootStartX = striker?.center?.x ?: finalSol.strikerPos.x
                                         val shootStartY = striker?.center?.y ?: finalSol.strikerPos.y
                                         val strikerNormX = ((shootStartX - outcome.board.left) / outcome.board.width).coerceIn(0f, 1f)
+                                        val (coinRowZone, coinColZone) = CarromMemoryData.coinZoneFor(finalSol.targetCoin.center, outcome.board)
 
                                         if (consensusPieces.isNotEmpty() || outcome.boardPieces.isNotEmpty()) {
                                             val countSource = consensusPieces.ifEmpty { outcome.boardPieces }
@@ -1185,6 +1359,8 @@ object AgentCoordinator {
                                                 pocketIndex = finalSol.pocketIndex,
                                                 cutAngleDeg = finalSol.cutAngleDeg,
                                                 strikerNormalizedX = strikerNormX,
+                                                coinRowZone = coinRowZone,
+                                                coinColZone = coinColZone,
                                                 powerStyle = finalSol.powerStyle,
                                                 movedStrikerWithSlider = didSlideBeforeThisShot,
                                                 isBankShot = finalSol.isBankShot,
