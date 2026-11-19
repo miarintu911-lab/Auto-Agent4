@@ -272,9 +272,7 @@ object AgentCoordinator {
             null
         }
 
-        if (mode == AgentExecutionMode.CONTINUOUS_MONITOR) {
-            appContext?.let { AgentKeepAliveService.start(it) }
-        }
+        appContext?.let { AgentKeepAliveService.start(it) }
 
         activeRunJob = scope.launch {
             try {
@@ -397,8 +395,12 @@ object AgentCoordinator {
                 val awaitingRepliesByPeer = mutableMapOf<String, ChatTurnGuard.AwaitingReplyState>()
                 var pendingSentTextForPeer: Pair<String, String>? = null
                 var prevCompositeScreen: String? = null
+                var prevPackageName: String? = null
                 var prevNonWaitActionType: AgentActionType? = null
+                var prevInputText: String? = null
                 var consecutiveNoChangeCount = 0
+                var activeSubGoalChecklist = ""
+                var completionGuardOverrides = 0
                 CarromVisionDetector.resetMotionHistory()
 
                 while (maxStepsLimit == null || step <= maxStepsLimit) {
@@ -438,6 +440,19 @@ object AgentCoordinator {
                     }
 
                     val currentContacts = _contacts.value
+                    val isAllPlatformBgMode = NotificationReplyHelper.isAllPlatformAutoReplyGoal(goal)
+                    val effectiveSavedContactsOnly = currentSettings.autoReplySavedContactsOnly && !isAllPlatformBgMode
+                    val packageLabelResolver: (String) -> String? = { pkgName ->
+                        runCatching {
+                            val pm = appContext?.packageManager
+                            if (pm != null) {
+                                val appInfo = pm.getApplicationInfo(pkgName, 0)
+                                pm.getApplicationLabel(appInfo)?.toString()
+                            } else {
+                                null
+                            }
+                        }.getOrNull()
+                    }
                     val isNotifDrivenAutoReply = NotificationReplyHelper.isNotificationDrivenAutoReplyGoal(
                         goal = goal,
                         mode = mode,
@@ -448,10 +463,12 @@ object AgentCoordinator {
                             notifications = notificationsSnapshot,
                             minTimestampMs = runStartedMs - 30_000L,
                             handledNotificationKeys = handledNotificationKeys,
-                            alreadyQueuedOrActive = listOfNotNull(activeReplyTarget) + pendingReplyQueue
+                            alreadyQueuedOrActive = listOfNotNull(activeReplyTarget) + pendingReplyQueue,
+                            allowAnyApp = isAllPlatformBgMode,
+                            packageLabelResolver = packageLabelResolver
                         )
                         for (candidateTarget in newlyArrived) {
-                            if (currentSettings.autoReplySavedContactsOnly) {
+                            if (effectiveSavedContactsOnly) {
                                 val savedMatch = ContactProfileStore.matchContactFromList(
                                     contacts = currentContacts,
                                     peerName = candidateTarget.senderName,
@@ -501,9 +518,16 @@ object AgentCoordinator {
                     val selfPkg = appContext?.packageName ?: "com.example"
                     val isOnLauncher = LauncherSearchHelper.isLauncherOrSearchScreen(snapshot.packageName, snapshot.nodes)
                     val isWrongNotifApp = currentActiveTarget != null &&
-                        ChatTurnGuard.isMessagingPackage(snapshot.packageName) &&
+                        (ChatTurnGuard.isMessagingPackage(snapshot.packageName) ||
+                            (isAllPlatformBgMode && !NotificationReplyHelper.isSystemOrUtilityPackage(snapshot.packageName))) &&
+                        !isOnLauncher &&
+                        snapshot.packageName != selfPkg &&
                         !snapshot.packageName.equals(currentActiveTarget.packageName, ignoreCase = true) &&
-                        !NotificationReplyHelper.appSearchNameForPackage(snapshot.packageName).equals(
+                        !NotificationReplyHelper.appSearchNameForPackage(
+                            packageName = snapshot.packageName,
+                            allowAnyApp = isAllPlatformBgMode,
+                            packageLabelResolver = packageLabelResolver
+                        ).equals(
                             currentActiveTarget.appDisplayName,
                             ignoreCase = true
                         )
@@ -564,7 +588,11 @@ object AgentCoordinator {
                     val isLikelyCarromLobby = isCarromContext && (isNonGameApp || CarromContextHelper.isLikelyGameLobbyMenu(snapshot.nodes))
                     val isActiveCarromMatchScreen = isCarromContext && !isNonGameApp && !isLikelyCarromLobby
 
-                    val chatObs = ChatTurnGuard.extractChatObservation(snapshot)
+                    val chatObs = ChatTurnGuard.extractChatObservation(
+                        snapshot = snapshot,
+                        forceTreatAsMessaging = currentActiveTarget != null &&
+                            snapshot.packageName.equals(currentActiveTarget.packageName, ignoreCase = true)
+                    )
                     val disableCacheForSpecificSender = currentActiveTarget != null && chatObs.isMessagingApp
                     val cacheMatch = if (
                         currentSettings.useZeroApiActionCache &&
@@ -662,6 +690,20 @@ object AgentCoordinator {
                         lastOutcomeHint = "[NO SCREEN CHANGE x$consecutiveNoChangeCount after ${prevNonWaitActionType?.name} — try another node, scroll, visual coordinates, or BACK!] $lastOutcomeHint"
                     }
 
+                    val actionReflectorHint = ActionReflectorHelper.buildReflectionHint(
+                        prevActionType = prevNonWaitActionType,
+                        prevPackageName = prevPackageName,
+                        prevInputText = prevInputText,
+                        consecutiveNoChangeCount = consecutiveNoChangeCount,
+                        snapshot = snapshot,
+                        isCarromContext = isCarromContext
+                    )
+                    if (actionReflectorHint.contains("REFLECTOR WARNING") &&
+                        !lastOutcomeHint.contains("REFLECTOR WARNING")
+                    ) {
+                        lastOutcomeHint = "$actionReflectorHint $lastOutcomeHint"
+                    }
+
                     val chatGuardHint = buildString {
                         if (currentActiveTarget != null) {
                             append("ACTIVE NOTIFICATION TARGET LOCK: Open ONLY sender '${currentActiveTarget.senderName}' inside '${currentActiveTarget.appDisplayName}' (incoming message: \"${currentActiveTarget.messageText.take(120)}\"). Do NOT open or reply to any other chat.")
@@ -687,7 +729,7 @@ object AgentCoordinator {
                             if (activeAwaitingReply != null && currentSettings.preventDoubleText) {
                                 append(" | ANTI-DOUBLE-TEXT LOCKED: You already sent '${activeAwaitingReply.lastSentText.take(60)}' and NO reply has arrived yet. You MUST return WAIT.")
                             }
-                            if (currentSettings.autoReplySavedContactsOnly && chatObs.inChatThread && matchedContact == null) {
+                            if (effectiveSavedContactsOnly && chatObs.inChatThread && matchedContact == null) {
                                 append(" | SAVED-CONTACTS-ONLY: '${chatObs.peerName}' is NOT saved; do NOT message them, return WAIT or BACK.")
                             }
                         }
@@ -1170,6 +1212,8 @@ object AgentCoordinator {
                                         savedContactsSummary = savedContactsSummary,
                                         chatGuardHint = chatGuardHint,
                                         carromMemorySummary = carromPromptMem,
+                                        subGoalChecklist = activeSubGoalChecklist,
+                                        actionReflectorHint = actionReflectorHint,
                                         forceVision = isCarromContext
                                     )
                                 }
@@ -1280,7 +1324,7 @@ object AgentCoordinator {
                                 requiresConfirmation = false
                             )
                         }
-                        currentSettings.autoReplySavedContactsOnly &&
+                        effectiveSavedContactsOnly &&
                             chatObs.isMessagingApp &&
                             chatObs.inChatThread &&
                             chatObs.peerName.isNotBlank() &&
@@ -1320,11 +1364,37 @@ object AgentCoordinator {
                                 requiresConfirmation = false
                             )
                         }
+                        rawPlannedAction.actionType == AgentActionType.COMPLETE &&
+                            ActionReflectorHelper.hasIncompleteChecklist(
+                                rawPlannedAction.subGoalChecklist ?: activeSubGoalChecklist
+                            ) &&
+                            completionGuardOverrides < 2 &&
+                            step < (maxStepsLimit ?: 999) - 1 -> {
+                            completionGuardOverrides++
+                            val remainingList = rawPlannedAction.subGoalChecklist ?: activeSubGoalChecklist
+                            lastOutcomeHint = "[COMPLETION BLOCKED BY MANAGER GUARD: Sub-goal checklist still has unfinished '[ ]' items: $remainingList. Finish all steps before returning COMPLETE!] $lastOutcomeHint"
+                            PlannedAction(
+                                actionType = AgentActionType.WAIT,
+                                targetNodeId = null,
+                                x = null,
+                                y = null,
+                                textToType = null,
+                                waitSeconds = 1,
+                                memoryNote = rawPlannedAction.memoryNote,
+                                subGoalChecklist = remainingList,
+                                reflectionStatus = "BLOCKED",
+                                reason = "Manager Guard: unfinished checklist items remain ($remainingList) — continuing execution.",
+                                requiresConfirmation = false
+                            )
+                        }
                         else -> rawPlannedAction
                     }
 
                     if (!plannedAction.memoryNote.isNullOrBlank()) {
                         workingMemory = plannedAction.memoryNote
+                    }
+                    if (!plannedAction.subGoalChecklist.isNullOrBlank()) {
+                        activeSubGoalChecklist = plannedAction.subGoalChecklist
                     }
 
                     if (!plannedAction.foulOrMistakeLesson.isNullOrBlank()) {
@@ -1503,7 +1573,13 @@ object AgentCoordinator {
                     val execResult = service.executeAction(plannedAction, snapshot)
                     val stepResultSummary = execResult.summary.ifBlank { targetSummary }
                     prevCompositeScreen = currentCompositeScreen
+                    prevPackageName = snapshot.packageName
                     prevNonWaitActionType = plannedAction.actionType
+                    prevInputText = if (plannedAction.actionType == AgentActionType.INPUT_TEXT) {
+                        plannedAction.textToType
+                    } else {
+                        null
+                    }
 
                     if (execResult.success) {
                         if (nextPendingCarromShotCandidate != null) {

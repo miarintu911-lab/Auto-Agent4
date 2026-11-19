@@ -169,6 +169,8 @@ data class PlannedAction(
     val textToType: String?,
     val waitSeconds: Int?,
     val memoryNote: String?,
+    val subGoalChecklist: String? = null,
+    val reflectionStatus: String? = null,
     val learnedRule: String? = null,
     val foulOrMistakeLesson: String? = null,
     val reason: String,
@@ -396,6 +398,7 @@ data class AgentSettings(
     val useSubPixelCircleRefinement: Boolean = true,
     val useClosedLoopSliderVerify: Boolean = true,
     val useCoordinateGridOverlay: Boolean = true,
+    val useSetOfMarkOverlay: Boolean = true,
     val preventDoubleText: Boolean = true,
     val autoReplySavedContactsOnly: Boolean = false,
     val replyOnlyOnMessageNotifications: Boolean = true,
@@ -406,6 +409,7 @@ data class AgentSettings(
     val safetyPolicyMode: SafetyPolicyMode = SafetyPolicyMode.PAYMENT_ONLY,
     val goHomeOnLaunch: Boolean = true,
     val keepScreenAwake: Boolean = false,
+    val showFloatingOverlay: Boolean = false,
     val stepDelayMs: Long = 1200L
 ) {
     fun rawKeyBlockFor(provider: AiProvider): String = when (provider) {

@@ -678,6 +678,117 @@ fun CommandDeckCard(
 }
 
 @Composable
+fun BackgroundAutoReplyQuickCard(
+    isServiceActive: Boolean,
+    isRunningThisMode: Boolean,
+    isOtherTaskBusy: Boolean,
+    onStartBgAutoReply: () -> Unit,
+    onStopBgAutoReply: () -> Unit
+) {
+    val activeBorderColor by animateColorAsState(
+        targetValue = if (isRunningThisMode) CyberTeal else SlateBorder,
+        animationSpec = tween(260),
+        label = "bgAutoReplyBorder"
+    )
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isRunningThisMode) CyberTealDark.copy(alpha = 0.45f) else SlateSurface
+        ),
+        border = BorderStroke(1.dp, activeBorderColor),
+        shape = MaterialTheme.shapes.large
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AllInclusive,
+                        contentDescription = null,
+                        tint = if (isRunningThisMode) CyberTeal else ElectricCyan,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.bg_auto_reply_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                if (isRunningThisMode) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(CyberTealDark)
+                            .border(1.dp, CyberTeal, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "24/7 LIVE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CyberTeal,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = stringResource(R.string.bg_auto_reply_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = {
+                    if (isRunningThisMode) onStopBgAutoReply() else onStartBgAutoReply()
+                },
+                enabled = isRunningThisMode || (isServiceActive && !isOtherTaskBusy),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .minimumInteractiveComponentSize()
+                    .height(50.dp)
+                    .testTag("btn_toggle_bg_auto_reply"),
+                colors = if (isRunningThisMode) {
+                    ButtonDefaults.buttonColors(
+                        containerColor = CrimsonContainer,
+                        contentColor = CrimsonStop
+                    )
+                } else {
+                    ButtonDefaults.buttonColors(
+                        containerColor = ElectricCyan,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        disabledContainerColor = SlateSurfaceElevated,
+                        disabledContentColor = TextSecondary
+                    )
+                }
+            ) {
+                Icon(
+                    imageVector = if (isRunningThisMode) Icons.Rounded.Stop else Icons.Rounded.AllInclusive,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isRunningThisMode) {
+                        stringResource(R.string.action_stop_bg_auto_reply)
+                    } else {
+                        stringResource(R.string.action_start_bg_auto_reply)
+                    },
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun WorkingMemoryCard(memory: String) {
     if (memory.isBlank()) return
     Card(
@@ -1838,6 +1949,16 @@ fun AgentSettingsSheet(
             )
 
             SettingSwitchRow(
+                title = stringResource(R.string.settings_set_of_mark_label),
+                subtitle = stringResource(R.string.settings_set_of_mark_desc),
+                checked = settings.useSetOfMarkOverlay,
+                testTag = "switch_set_of_mark_overlay",
+                onCheckedChange = { enabled ->
+                    onUpdate { it.copy(useSetOfMarkOverlay = enabled) }
+                }
+            )
+
+            SettingSwitchRow(
                 title = stringResource(R.string.settings_vision_label),
                 subtitle = stringResource(R.string.settings_vision_desc),
                 checked = settings.useVisionScreenshot,
@@ -1917,6 +2038,16 @@ fun AgentSettingsSheet(
                 checked = settings.keepScreenAwake,
                 onCheckedChange = { enabled ->
                     onUpdate { it.copy(keepScreenAwake = enabled) }
+                }
+            )
+
+            SettingSwitchRow(
+                title = stringResource(R.string.settings_floating_overlay_label),
+                subtitle = stringResource(R.string.settings_floating_overlay_desc),
+                checked = settings.showFloatingOverlay,
+                testTag = "switch_floating_overlay",
+                onCheckedChange = { enabled ->
+                    onUpdate { it.copy(showFloatingOverlay = enabled) }
                 }
             )
 

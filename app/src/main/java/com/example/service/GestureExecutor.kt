@@ -120,23 +120,24 @@ object GestureExecutor {
                 val root = service.rootInActiveWindow
                 var liveNode = targetNode?.let {
                     NodeTreeParser.findAccessibilityNodeByBounds(root, it.bounds, screenWidth, screenHeight)
-                }
+                }?.let { findEditableDescendantOrSelf(it) ?: it }
                 if (liveNode == null) {
                     liveNode = root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                 }
                 val focusTapX = action.x ?: targetNode?.bounds?.centerX
                 val focusTapY = action.y ?: targetNode?.bounds?.centerY
-                if ((liveNode == null || !liveNode.isFocused) && focusTapX != null && focusTapY != null) {
+                if ((liveNode == null || !liveNode.isFocused || !liveNode.isEditable) && focusTapX != null && focusTapY != null) {
                     dispatchTap(
                         service,
                         focusTapX.coerceIn(1, screenWidth - 1).toFloat(),
                         focusTapY.coerceIn(1, screenHeight - 1).toFloat()
                     )
-                    delay(260)
+                    delay(320)
                     val refreshedRoot = service.rootInActiveWindow
-                    liveNode = targetNode?.let {
-                        NodeTreeParser.findAccessibilityNodeByBounds(refreshedRoot, it.bounds, screenWidth, screenHeight)
-                    } ?: refreshedRoot?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                    liveNode = refreshedRoot?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                        ?: targetNode?.let {
+                            NodeTreeParser.findAccessibilityNodeByBounds(refreshedRoot, it.bounds, screenWidth, screenHeight)
+                        }?.let { findEditableDescendantOrSelf(it) ?: it }
                 }
 
                 if (liveNode != null) {
@@ -148,6 +149,14 @@ object GestureExecutor {
                     }
                     var ok = liveNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
                     if (!ok) {
+                        val existingLen = liveNode.text?.length ?: 0
+                        if (existingLen > 0) {
+                            val selArgs = Bundle().apply {
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, existingLen)
+                            }
+                            liveNode.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
+                        }
                         val clipboard = service.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                         if (clipboard != null) {
                             clipboard.setPrimaryClip(ClipData.newPlainText("TapPilot", text))
@@ -289,5 +298,19 @@ object GestureExecutor {
                 }
             }
         } ?: false
+    }
+
+    private fun findEditableDescendantOrSelf(
+        node: AccessibilityNodeInfo?,
+        depth: Int = 0
+    ): AccessibilityNodeInfo? {
+        if (node == null || depth > 5) return null
+        if (node.isEditable) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val match = findEditableDescendantOrSelf(child, depth + 1)
+            if (match != null) return match
+        }
+        return null
     }
 }

@@ -39,6 +39,7 @@ class AgentSettingsStore(private val context: Context) {
         val USE_SUBPIXEL_CIRCLE_REFINEMENT = booleanPreferencesKey("use_subpixel_circle_refinement")
         val USE_CLOSED_LOOP_SLIDER_VERIFY = booleanPreferencesKey("use_closed_loop_slider_verify")
         val USE_COORDINATE_GRID_OVERLAY = booleanPreferencesKey("use_coordinate_grid_overlay")
+        val USE_SET_OF_MARK_OVERLAY = booleanPreferencesKey("use_set_of_mark_overlay")
         val PREVENT_DOUBLE_TEXT = booleanPreferencesKey("prevent_double_text")
         val AUTO_REPLY_SAVED_CONTACTS_ONLY = booleanPreferencesKey("auto_reply_saved_contacts_only")
         val REPLY_ONLY_ON_NOTIFICATIONS = booleanPreferencesKey("reply_only_on_message_notifications")
@@ -49,6 +50,7 @@ class AgentSettingsStore(private val context: Context) {
         val SAFETY_POLICY_MODE = stringPreferencesKey("safety_policy_mode")
         val GO_HOME_ON_LAUNCH = booleanPreferencesKey("go_home_on_launch")
         val KEEP_SCREEN_AWAKE = booleanPreferencesKey("keep_screen_awake")
+        val SHOW_FLOATING_OVERLAY = booleanPreferencesKey("show_floating_overlay")
         val STEP_DELAY_MS = longPreferencesKey("step_delay_ms")
     }
 
@@ -81,6 +83,7 @@ class AgentSettingsStore(private val context: Context) {
             prefs[Keys.USE_SUBPIXEL_CIRCLE_REFINEMENT] = updated.useSubPixelCircleRefinement
             prefs[Keys.USE_CLOSED_LOOP_SLIDER_VERIFY] = updated.useClosedLoopSliderVerify
             prefs[Keys.USE_COORDINATE_GRID_OVERLAY] = updated.useCoordinateGridOverlay
+            prefs[Keys.USE_SET_OF_MARK_OVERLAY] = updated.useSetOfMarkOverlay
             prefs[Keys.PREVENT_DOUBLE_TEXT] = updated.preventDoubleText
             prefs[Keys.AUTO_REPLY_SAVED_CONTACTS_ONLY] = updated.autoReplySavedContactsOnly
             prefs[Keys.REPLY_ONLY_ON_NOTIFICATIONS] = updated.replyOnlyOnMessageNotifications
@@ -91,6 +94,7 @@ class AgentSettingsStore(private val context: Context) {
             prefs[Keys.SAFETY_POLICY_MODE] = updated.safetyPolicyMode.name
             prefs[Keys.GO_HOME_ON_LAUNCH] = updated.goHomeOnLaunch
             prefs[Keys.KEEP_SCREEN_AWAKE] = updated.keepScreenAwake
+            prefs[Keys.SHOW_FLOATING_OVERLAY] = updated.showFloatingOverlay
             prefs[Keys.STEP_DELAY_MS] = updated.stepDelayMs.coerceIn(400L, 4000L)
         }
     }
@@ -140,6 +144,7 @@ class AgentSettingsStore(private val context: Context) {
             useSubPixelCircleRefinement = prefs[Keys.USE_SUBPIXEL_CIRCLE_REFINEMENT] ?: true,
             useClosedLoopSliderVerify = prefs[Keys.USE_CLOSED_LOOP_SLIDER_VERIFY] ?: true,
             useCoordinateGridOverlay = prefs[Keys.USE_COORDINATE_GRID_OVERLAY] ?: true,
+            useSetOfMarkOverlay = prefs[Keys.USE_SET_OF_MARK_OVERLAY] ?: true,
             preventDoubleText = prefs[Keys.PREVENT_DOUBLE_TEXT] ?: true,
             autoReplySavedContactsOnly = prefs[Keys.AUTO_REPLY_SAVED_CONTACTS_ONLY] ?: false,
             replyOnlyOnMessageNotifications = prefs[Keys.REPLY_ONLY_ON_NOTIFICATIONS] ?: true,
@@ -150,6 +155,7 @@ class AgentSettingsStore(private val context: Context) {
             safetyPolicyMode = safetyMode,
             goHomeOnLaunch = prefs[Keys.GO_HOME_ON_LAUNCH] ?: true,
             keepScreenAwake = prefs[Keys.KEEP_SCREEN_AWAKE] ?: false,
+            showFloatingOverlay = prefs[Keys.SHOW_FLOATING_OVERLAY] ?: false,
             stepDelayMs = (prefs[Keys.STEP_DELAY_MS] ?: 1200L).coerceIn(400L, 4000L)
         )
     }

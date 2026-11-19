@@ -13,6 +13,7 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import com.example.agent.AgentCoordinator
+import com.example.agent.AgentUiState
 import com.example.agent.NotificationReplyHelper
 import com.example.agent.NotificationSignal
 import com.example.agent.PlannedAction
@@ -23,6 +24,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 class TapPilotAccessibilityService : AccessibilityService() {
@@ -36,8 +38,17 @@ class TapPilotAccessibilityService : AccessibilityService() {
         overlayController = FloatingOverlayController(this)
         serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate).also { scope ->
             scope.launch {
-                AgentCoordinator.uiState.collectLatest { state ->
-                    overlayController?.renderState(state)
+                combine(
+                    AgentCoordinator.uiState,
+                    AgentCoordinator.settings
+                ) { state, settings ->
+                    state to settings.showFloatingOverlay
+                }.collectLatest { (state, showOverlay) ->
+                    if (showOverlay) {
+                        overlayController?.renderState(state)
+                    } else {
+                        overlayController?.renderState(AgentUiState.Idle)
+                    }
                 }
             }
         }

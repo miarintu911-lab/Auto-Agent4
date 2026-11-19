@@ -34,6 +34,8 @@ class ExampleRobolectricTest {
               "textToType": null,
               "waitSeconds": 45,
               "memoryNote": "Posted in group; awaiting Messenger reply.",
+              "subGoalChecklist": "[x] Open App | [ ] Verify Reply",
+              "reflectionStatus": "OK",
               "reason": "Waiting for seller reply",
               "requiresConfirmation": false
             }
@@ -43,6 +45,8 @@ class ExampleRobolectricTest {
         assertEquals(AgentActionType.WAIT, parsed.actionType)
         assertEquals(45, parsed.waitSeconds)
         assertEquals("Posted in group; awaiting Messenger reply.", parsed.memoryNote)
+        assertEquals("[x] Open App | [ ] Verify Reply", parsed.subGoalChecklist)
+        assertEquals("OK", parsed.reflectionStatus)
         assertFalse(parsed.requiresConfirmation)
     }
 
@@ -153,6 +157,55 @@ class ExampleRobolectricTest {
         // Corner pixel at (0,0) of immutable source remains intact while annotated copy draws grid lines
         assertEquals(android.graphics.Color.rgb(210, 180, 140), source.getPixel(108, 600))
         annotated.recycle()
+        source.recycle()
+    }
+
+    @Test
+    fun `set of mark annotator draws numbered bounding boxes without mutating source bitmap`() {
+        val source = android.graphics.Bitmap.createBitmap(540, 1200, android.graphics.Bitmap.Config.ARGB_8888)
+        source.eraseColor(android.graphics.Color.WHITE)
+
+        val nodes = listOf(
+            com.example.agent.ScreenNode(
+                id = 1,
+                className = "android.widget.EditText",
+                text = "Search",
+                contentDesc = "",
+                viewId = "search_input",
+                bounds = com.example.agent.ScreenBounds(60, 140, 980, 260),
+                isClickable = true,
+                isEditable = true,
+                isScrollable = false,
+                isChecked = false,
+                isFocused = false
+            ),
+            com.example.agent.ScreenNode(
+                id = 2,
+                className = "android.widget.Button",
+                text = "Send",
+                contentDesc = "Send",
+                viewId = "btn_send",
+                bounds = com.example.agent.ScreenBounds(840, 1900, 1020, 2040),
+                isClickable = true,
+                isEditable = false,
+                isScrollable = false,
+                isChecked = false,
+                isFocused = false
+            )
+        )
+
+        val som = com.example.ai.VisualGridAnnotator.createSetOfMarkCopy(
+            source = source,
+            screenWidth = 1080,
+            screenHeight = 2400,
+            nodes = nodes
+        )
+
+        assertEquals(540, som.width)
+        assertEquals(1200, som.height)
+        assertFalse(som === source)
+        assertEquals(android.graphics.Color.WHITE, source.getPixel(270, 600))
+        som.recycle()
         source.recycle()
     }
 

@@ -12,9 +12,25 @@ object ChatTurnGuard {
         "com.whatsapp",
         "com.whatsapp.w4b",
         "com.instagram.android",
+        "com.instagram.barcelona",
         "org.telegram.messenger",
+        "org.telegram.plus",
         "com.imo.android.imoim",
-        "com.viber.voip"
+        "com.viber.voip",
+        "com.discord",
+        "com.snapchat.android",
+        "org.thoughtcrime.securesms",
+        "jp.naver.line.android",
+        "com.google.android.apps.messaging",
+        "com.samsung.android.messaging",
+        "com.tencent.mm",
+        "com.twitter.android",
+        "com.linkedin.android",
+        "com.skype.raider",
+        "com.zhiliaoapp.musically",
+        "com.ss.android.ugc.trill",
+        "com.badoo.mobile",
+        "com.tinder"
     )
 
     private val HEADER_IGNORE_TOKENS = setOf(
@@ -66,7 +82,20 @@ object ChatTurnGuard {
             pkg.contains("orca") ||
             pkg.contains("mlite") ||
             pkg.contains("messenger") ||
-            pkg.contains("telegram")
+            pkg.contains("telegram") ||
+            pkg.contains("discord") ||
+            pkg.contains("snapchat") ||
+            pkg.contains("securesms") ||
+            pkg.contains("naver.line") ||
+            pkg.contains("messaging") ||
+            pkg.contains("viber") ||
+            pkg.contains("imo") ||
+            pkg.contains("wechat") ||
+            pkg.contains("tencent.mm") ||
+            pkg.contains("twitter") ||
+            pkg.contains("skype") ||
+            pkg.contains("linkedin") ||
+            pkg.contains("barcelona")
     }
 
     fun peerKey(packageName: String, peerName: String): String {
@@ -84,8 +113,14 @@ object ChatTurnGuard {
         }
     }
 
-    fun extractChatObservation(snapshot: UiSnapshot): ChatObservation {
-        if (!isMessagingPackage(snapshot.packageName) || snapshot.screenHeight <= 0 || snapshot.screenWidth <= 0) {
+    fun extractChatObservation(
+        snapshot: UiSnapshot,
+        forceTreatAsMessaging: Boolean = false
+    ): ChatObservation {
+        if ((!forceTreatAsMessaging && !isMessagingPackage(snapshot.packageName)) ||
+            snapshot.screenHeight <= 0 ||
+            snapshot.screenWidth <= 0
+        ) {
             return ChatObservation(
                 isMessagingApp = false,
                 inChatThread = false,

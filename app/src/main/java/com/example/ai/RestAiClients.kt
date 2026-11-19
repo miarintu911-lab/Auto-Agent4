@@ -257,6 +257,8 @@ object RestAiClients {
                   "textToType": string or null,
                   "waitSeconds": integer or null,
                   "memoryNote": string or null,
+                  "subGoalChecklist": string or null,
+                  "reflectionStatus": "FIRST_STEP" | "OK" | "NO_EFFECT" | "WRONG_PAGE" | "BLOCKED" | null,
                   "learnedRule": string or null,
                   "foulOrMistakeLesson": string or null,
                   "reason": string,
@@ -398,6 +400,8 @@ object RestAiClients {
             .put("textToType", JSONObject().put("type", "STRING").put("nullable", true))
             .put("waitSeconds", JSONObject().put("type", "INTEGER").put("nullable", true))
             .put("memoryNote", JSONObject().put("type", "STRING").put("nullable", true))
+            .put("subGoalChecklist", JSONObject().put("type", "STRING").put("nullable", true))
+            .put("reflectionStatus", JSONObject().put("type", "STRING").put("nullable", true))
             .put("learnedRule", JSONObject().put("type", "STRING").put("nullable", true))
             .put("foulOrMistakeLesson", JSONObject().put("type", "STRING").put("nullable", true))
             .put("reason", JSONObject().put("type", "STRING"))

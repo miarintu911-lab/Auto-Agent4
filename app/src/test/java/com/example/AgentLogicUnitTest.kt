@@ -2054,6 +2054,220 @@ class AgentLogicUnitTest {
         assertTrue(com.example.agent.NotificationReplyHelper.matchesTargetPeer("Arif Client", "Arif Client"))
         assertFalse(com.example.agent.NotificationReplyHelper.matchesTargetPeer("Karim Vai", "Arif Client"))
     }
+
+    @Test
+    fun `action reflector detects rejected input text and guards incomplete sub goal checklists`() {
+        assertTrue(com.example.agent.ActionReflectorHelper.hasIncompleteChecklist("[x] Open App | [ ] Send Reply"))
+        assertFalse(com.example.agent.ActionReflectorHelper.hasIncompleteChecklist("[x] Open App | [x] Send Reply"))
+        assertFalse(com.example.agent.ActionReflectorHelper.hasIncompleteChecklist(null))
+
+        val emptySearchSnapshot = com.example.agent.UiSnapshot(
+            packageName = "com.whatsapp",
+            screenWidth = 1080,
+            screenHeight = 2400,
+            nodes = listOf(
+                ScreenNode(
+                    id = 1,
+                    className = "android.widget.EditText",
+                    text = "Search...",
+                    contentDesc = "",
+                    viewId = "search_bar",
+                    bounds = ScreenBounds(80, 120, 960, 220),
+                    isClickable = true,
+                    isEditable = true,
+                    isScrollable = false,
+                    isChecked = false,
+                    isFocused = false
+                )
+            ),
+            screenshot = null,
+            captureNote = ""
+        )
+        val missingInputWarning = com.example.agent.ActionReflectorHelper.buildReflectionHint(
+            prevActionType = AgentActionType.INPUT_TEXT,
+            prevPackageName = "com.whatsapp",
+            prevInputText = "Arif Client",
+            consecutiveNoChangeCount = 0,
+            snapshot = emptySearchSnapshot,
+            isCarromContext = false
+        )
+        assertTrue(missingInputWarning.contains("REFLECTOR WARNING"))
+        assertTrue(missingInputWarning.contains("Arif Client"))
+
+        val filledSearchSnapshot = emptySearchSnapshot.copy(
+            nodes = listOf(
+                ScreenNode(
+                    id = 1,
+                    className = "android.widget.EditText",
+                    text = "Arif Client",
+                    contentDesc = "",
+                    viewId = "search_bar",
+                    bounds = ScreenBounds(80, 120, 960, 220),
+                    isClickable = true,
+                    isEditable = true,
+                    isScrollable = false,
+                    isChecked = false,
+                    isFocused = true
+                )
+            )
+        )
+        val okInput = com.example.agent.ActionReflectorHelper.buildReflectionHint(
+            prevActionType = AgentActionType.INPUT_TEXT,
+            prevPackageName = "com.whatsapp",
+            prevInputText = "Arif Client",
+            consecutiveNoChangeCount = 0,
+            snapshot = filledSearchSnapshot,
+            isCarromContext = false
+        )
+        assertTrue(okInput.contains("REFLECTOR OK"))
+
+        val staleTapWarning = com.example.agent.ActionReflectorHelper.buildReflectionHint(
+            prevActionType = AgentActionType.TAP,
+            prevPackageName = "com.whatsapp",
+            prevInputText = null,
+            consecutiveNoChangeCount = 2,
+            snapshot = filledSearchSnapshot,
+            isCarromContext = false
+        )
+        assertTrue(staleTapWarning.contains("REFLECTOR WARNING"))
+        assertTrue(staleTapWarning.contains("2x"))
+    }
+
+    @Test
+    fun `all platform background goal accepts any non system app notification and talks simply if unsaved`() {
+        val bgGoal = com.example.agent.NotificationReplyHelper.ALL_PLATFORM_BG_GOAL
+        assertTrue(com.example.agent.NotificationReplyHelper.isAllPlatformAutoReplyGoal(bgGoal))
+        assertTrue(
+            com.example.agent.NotificationReplyHelper.isNotificationDrivenAutoReplyGoal(
+                goal = bgGoal,
+                mode = com.example.agent.AgentExecutionMode.CONTINUOUS_MONITOR,
+                settings = AgentSettings(replyOnlyOnMessageNotifications = false)
+            )
+        )
+
+        val discordNotif = com.example.agent.NotificationReplyHelper.parseNotification(
+            packageName = "com.discord",
+            title = "Tanvir",
+            body = "Bhai ajke game khelba?",
+            conversationTitle = null,
+            rawFallbackText = "",
+            timestampMs = 50_000L,
+            isGroupSummary = false
+        )
+        val signalNotif = com.example.agent.NotificationReplyHelper.parseNotification(
+            packageName = "org.thoughtcrime.securesms",
+            title = "Nabila",
+            body = "Kothay acho?",
+            conversationTitle = null,
+            rawFallbackText = "",
+            timestampMs = 51_000L,
+            isGroupSummary = false
+        )
+        val customAppNotif = com.example.agent.NotificationReplyHelper.parseNotification(
+            packageName = "com.custom.chatapp",
+            title = "Rafi",
+            body = "Hello there!",
+            conversationTitle = null,
+            rawFallbackText = "",
+            timestampMs = 52_000L,
+            isGroupSummary = false
+        )
+        val systemNotif = com.example.agent.NotificationReplyHelper.parseNotification(
+            packageName = "com.android.systemui",
+            title = "Android System",
+            body = "Charging rapidly",
+            conversationTitle = null,
+            rawFallbackText = "",
+            timestampMs = 53_000L,
+            isGroupSummary = false
+        )
+        org.junit.Assert.assertNull(systemNotif)
+        org.junit.Assert.assertNotNull(discordNotif)
+        org.junit.Assert.assertNotNull(signalNotif)
+        org.junit.Assert.assertNotNull(customAppNotif)
+
+        val targets = com.example.agent.NotificationReplyHelper.extractNewTargets(
+            notifications = listOfNotNull(discordNotif, signalNotif, customAppNotif),
+            minTimestampMs = 40_000L,
+            handledNotificationKeys = emptySet(),
+            alreadyQueuedOrActive = emptyList(),
+            allowAnyApp = true,
+            packageLabelResolver = { pkg ->
+                if (pkg == "com.custom.chatapp") "CustomChat" else null
+            }
+        )
+        assertEquals(3, targets.size)
+        assertEquals("Discord", targets[0].appDisplayName)
+        assertEquals("Signal", targets[1].appDisplayName)
+        assertEquals("CustomChat", targets[2].appDisplayName)
+
+        // With allowAnyApp = true, even without saved relationship, talks simply & naturally
+        val simpleSummary = com.example.agent.NotificationReplyHelper.buildRelationshipCheckSummary(
+            target = targets[2],
+            matchedContact = null
+        )
+        assertTrue(simpleSummary.contains("সিম্পল, স্বাভাবিক"))
+        assertTrue(simpleSummary.contains("Keep talking simply"))
+
+        // ChatTurnGuard treats custom app as a valid chat screen when forceTreatAsMessaging is true
+        val customSnapshot = com.example.agent.UiSnapshot(
+            packageName = "com.custom.chatapp",
+            screenWidth = 1080,
+            screenHeight = 2400,
+            nodes = listOf(
+                ScreenNode(
+                    id = 1,
+                    className = "android.widget.TextView",
+                    text = "Rafi",
+                    contentDesc = "",
+                    viewId = "header_name",
+                    bounds = ScreenBounds(120, 120, 500, 190),
+                    isClickable = false,
+                    isEditable = false,
+                    isScrollable = false,
+                    isChecked = false,
+                    isFocused = false
+                ),
+                ScreenNode(
+                    id = 2,
+                    className = "android.widget.TextView",
+                    text = "Hello there!",
+                    contentDesc = "",
+                    viewId = "msg_body",
+                    bounds = ScreenBounds(80, 900, 620, 980),
+                    isClickable = false,
+                    isEditable = false,
+                    isScrollable = false,
+                    isChecked = false,
+                    isFocused = false
+                ),
+                ScreenNode(
+                    id = 3,
+                    className = "android.widget.EditText",
+                    text = "Write a message",
+                    contentDesc = "",
+                    viewId = "msg_input",
+                    bounds = ScreenBounds(80, 2100, 880, 2220),
+                    isClickable = true,
+                    isEditable = true,
+                    isScrollable = false,
+                    isChecked = false,
+                    isFocused = true
+                )
+            ),
+            screenshot = null,
+            captureNote = ""
+        )
+        val obs = com.example.agent.ChatTurnGuard.extractChatObservation(
+            snapshot = customSnapshot,
+            forceTreatAsMessaging = true
+        )
+        assertTrue(obs.isMessagingApp)
+        assertTrue(obs.inChatThread)
+        assertEquals("Rafi", obs.peerName)
+        assertEquals("Hello there!", obs.lastMessageText)
+        assertFalse(AgentSettings().showFloatingOverlay)
+    }
 }
 
 

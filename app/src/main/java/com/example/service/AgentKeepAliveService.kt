@@ -53,10 +53,32 @@ class AgentKeepAliveService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP_MONITOR) {
-            AgentCoordinator.stopTask()
-            stopSelfSafely()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP_MONITOR -> {
+                AgentCoordinator.stopTask()
+                stopSelfSafely()
+                return START_NOT_STICKY
+            }
+            ACTION_PAUSE_MONITOR -> {
+                AgentCoordinator.pauseTask("Paused from notification panel.")
+                updateNotification(AgentCoordinator.uiState.value)
+                return START_STICKY
+            }
+            ACTION_RESUME_MONITOR -> {
+                AgentCoordinator.resumeTask()
+                updateNotification(AgentCoordinator.uiState.value)
+                return START_STICKY
+            }
+            ACTION_APPROVE_CONFIRM -> {
+                AgentCoordinator.confirmPendingAction(true)
+                updateNotification(AgentCoordinator.uiState.value)
+                return START_STICKY
+            }
+            ACTION_CANCEL_CONFIRM -> {
+                AgentCoordinator.confirmPendingAction(false)
+                updateNotification(AgentCoordinator.uiState.value)
+                return START_STICKY
+            }
         }
         startForegroundWithState(AgentCoordinator.uiState.value)
         return START_STICKY
@@ -85,7 +107,18 @@ class AgentKeepAliveService : Service() {
 
     private fun updateNotification(state: AgentUiState) {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, buildNotification(state))
+        runCatching { manager.notify(NOTIFICATION_ID, buildNotification(state)) }
+    }
+
+    private fun serviceActionIntent(action: String, requestCode: Int): PendingIntent {
+        return PendingIntent.getService(
+            this,
+            requestCode,
+            Intent(this, AgentKeepAliveService::class.java).apply {
+                this.action = action
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun buildNotification(state: AgentUiState): Notification {
@@ -98,32 +131,34 @@ class AgentKeepAliveService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val stopIntent = PendingIntent.getService(
-            this,
-            101,
-            Intent(this, AgentKeepAliveService::class.java).apply {
-                action = ACTION_STOP_MONITOR
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val stopIntent = serviceActionIntent(ACTION_STOP_MONITOR, 101)
+        val pauseIntent = serviceActionIntent(ACTION_PAUSE_MONITOR, 102)
+        val resumeIntent = serviceActionIntent(ACTION_RESUME_MONITOR, 103)
+        val approveIntent = serviceActionIntent(ACTION_APPROVE_CONFIRM, 104)
+        val cancelIntent = serviceActionIntent(ACTION_CANCEL_CONFIRM, 105)
 
         val (title, body) = when (state) {
             is AgentUiState.Running -> {
-                val modeTag = if (state.mode == AgentExecutionMode.CONTINUOUS_MONITOR) "Monitor" else "Task"
-                "$modeTag • Step ${state.currentStep}" to state.lastThought.ifBlank { state.phase.label }
+                val modeTag = if (state.mode == AgentExecutionMode.CONTINUOUS_MONITOR) {
+                    "Monitor • Cycle #${state.currentStep}"
+                } else {
+                    "TapPilot • Step ${state.currentStep}/${state.maxSteps ?: 0}"
+                }
+                modeTag to state.lastThought.ifBlank { state.phase.label }
             }
             is AgentUiState.Paused -> {
-                "TapPilot Paused • Step ${state.currentStep}" to state.pauseReason
+                val modeTag = if (state.mode == AgentExecutionMode.CONTINUOUS_MONITOR) "Monitor" else "TapPilot"
+                "$modeTag Paused • #${state.currentStep}" to state.pauseReason.ifBlank { "Paused. Tap Resume or Stop." }
             }
             is AgentUiState.AwaitingConfirmation -> {
-                "Payment/Security Gate • Approval Needed" to state.targetDescription
+                "Payment / Security Gate • Approval Needed" to "${state.targetDescription} — ${state.safetyReason}"
             }
             else -> {
                 "TapPilot Monitor Active" to "Listening for screen updates and notifications..."
             }
         }
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(body)
@@ -131,8 +166,23 @@ class AgentKeepAliveService : Service() {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(openAppIntent)
-            .addAction(0, getString(R.string.action_stop_agent), stopIntent)
-            .build()
+
+        when (state) {
+            is AgentUiState.Paused -> {
+                builder.addAction(0, getString(R.string.action_resume_agent), resumeIntent)
+                builder.addAction(0, getString(R.string.action_stop_agent), stopIntent)
+            }
+            is AgentUiState.AwaitingConfirmation -> {
+                builder.addAction(0, getString(R.string.confirm_approve), approveIntent)
+                builder.addAction(0, getString(R.string.confirm_cancel), cancelIntent)
+            }
+            else -> {
+                builder.addAction(0, getString(R.string.action_pause_agent), pauseIntent)
+                builder.addAction(0, getString(R.string.action_stop_agent), stopIntent)
+            }
+        }
+
+        return builder.build()
     }
 
     private fun createNotificationChannel() {
@@ -140,9 +190,11 @@ class AgentKeepAliveService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 getString(R.string.monitor_channel_name),
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = getString(R.string.monitor_channel_desc)
+                setSound(null, null)
+                enableVibration(false)
             }
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
@@ -177,6 +229,10 @@ class AgentKeepAliveService : Service() {
         private const val CHANNEL_ID = "tappilot_monitor_channel"
         private const val NOTIFICATION_ID = 4041
         private const val ACTION_STOP_MONITOR = "com.example.action.STOP_MONITOR"
+        private const val ACTION_PAUSE_MONITOR = "com.example.action.PAUSE_MONITOR"
+        private const val ACTION_RESUME_MONITOR = "com.example.action.RESUME_MONITOR"
+        private const val ACTION_APPROVE_CONFIRM = "com.example.action.APPROVE_CONFIRM"
+        private const val ACTION_CANCEL_CONFIRM = "com.example.action.CANCEL_CONFIRM"
 
         fun start(context: Context) {
             val intent = Intent(context, AgentKeepAliveService::class.java)

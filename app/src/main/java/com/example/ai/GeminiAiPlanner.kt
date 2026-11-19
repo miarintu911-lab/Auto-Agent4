@@ -61,10 +61,12 @@ class GeminiAiPlanner {
         11. ANTI-DOUBLE-TEXT / NO-SPAM CHAT RULE (CRITICAL): In Messenger, Facebook, WhatsApp, Instagram, or Telegram, NEVER send another message (`INPUT_TEXT` or `Send`) if your previous message is still the latest bubble or the recipient has NOT replied yet! Do NOT send repeated follow-ups like "কি খবর বন্ধু" or "hello?". Instead, return `WAIT` (`waitSeconds = 25..45`) until an incoming reply or new notification arrives.
         12. NOTIFICATION-ONLY AUTO-REPLY & RELATIONSHIP PERSONA RULE:
            - When `ACTIVE NOTIFICATION TARGET LOCK` is shown in `LIVE CHAT & TURN-TAKING STATUS`, you MUST open ONLY that exact sender ID inside that exact app — NEVER open other random chats.
-           - ALWAYS check `MATCHED CONTACT & RELATIONSHIP PERSONA` and `SAVED CONTACTS ROSTER` (WhatsApp / WA Business / Facebook / Messenger) FIRST:
+           - ALWAYS check `MATCHED CONTACT & RELATIONSHIP PERSONA` and `SAVED CONTACTS ROSTER` (across WhatsApp / WA Business / Facebook / Messenger / Telegram / imo / ANY chat platform) FIRST:
              * If a relationship IS saved for that sender + app (Friend/বন্ধু, GF/জিএফ, Brother/ভাই, Sister/বোন, Family/পরিবার, Business), strictly adopt that saved relationship tone, honorifics, and custom note.
-             * If NO relationship is saved (`NO MATCH` and Saved-Contacts-Only is off), speak warmly, politely, respectfully, and nicely (সুন্দর, মিষ্টি ও ভদ্রভাবে কথা বলো) according to what they wrote!
-        13. STRONGER ACTION RECOVERY: Never repeat the exact same failing TAP/DRAG. If `PREVIOUS ACTION RESULT` warns `[NO SCREEN CHANGE]`, immediately change strategy: pick the parent container/text node, use visual coordinates from the screenshot, scroll slightly, slide left/right, or press `BACK`.
+             * If NO relationship is saved (`NO MATCH`), keep talking simply, naturally, politely, and warmly (সিম্পল, সহজ, স্বাভাবিক ও ভদ্রভাবে কথা বলো) according to their message (unless Saved-Contacts-Only specifically asks to skip).
+        13. STRONGER ACTION RECOVERY & REFLECTOR: Set `reflectionStatus` (`FIRST_STEP` | `OK` | `NO_EFFECT` | `WRONG_PAGE` | `BLOCKED`) after inspecting whether the previous action actually changed the screen as intended. Never repeat the exact same failing TAP/DRAG. If `PREVIOUS ACTION RESULT` warns `[NO SCREEN CHANGE]` or `[REFLECTOR WARNING]`, immediately change strategy: pick the parent container/text node, tap the visual Set-of-Mark box coordinates, scroll slightly, slide left/right, or press `BACK`.
+        14. MANAGER SUB-GOAL CHECKLIST & STRICT COMPLETION: On Step 1 (or when receiving a multi-step command), break the user goal into a pipe-separated checklist in `subGoalChecklist` like `[x] Open App | [ ] Search Item | [ ] Apply Setting | [ ] Verify Result`, updating `[ ]` -> `[x]` as steps finish. NEVER return `COMPLETE` while any `[ ]` item remains unfinished!
+        15. SET-OF-MARK (SoM) VISUAL GROUNDING: When numbered colored bounding boxes (`1`, `2`, `3`...) appear over buttons/fields in the screenshot, match the numbered box directly to `#ID` in the UI Node Tree for exact, mistake-free tapping & text entry.
     """.trimIndent()
 
     private val researchSystemPrompt = """
@@ -133,6 +135,14 @@ class GeminiAiPlanner {
                 description = "Updated short-term working memory of current progress/match state.",
                 nullable = true
             ),
+            "subGoalChecklist" to Schema.string(
+                description = "Live pipe-separated sub-goal checklist e.g. '[x] Step 1 | [ ] Step 2 | [ ] Step 3'. Keep [ ] until verified on screen.",
+                nullable = true
+            ),
+            "reflectionStatus" to Schema.string(
+                description = "Evaluation of previous step: FIRST_STEP, OK, NO_EFFECT, WRONG_PAGE, or BLOCKED.",
+                nullable = true
+            ),
             "learnedRule" to Schema.string(
                 description = "New winning strategy or effective shot/control technique discovered from the previous step's result.",
                 nullable = true
@@ -158,6 +168,8 @@ class GeminiAiPlanner {
             "textToType",
             "waitSeconds",
             "memoryNote",
+            "subGoalChecklist",
+            "reflectionStatus",
             "learnedRule",
             "foulOrMistakeLesson"
         )
@@ -273,6 +285,8 @@ class GeminiAiPlanner {
         savedContactsSummary: String = "",
         chatGuardHint: String = "",
         carromMemorySummary: String = "",
+        subGoalChecklist: String = "",
+        actionReflectorHint: String = "",
         forceVision: Boolean = false
     ): Result<PlannedAction> {
         return try {
@@ -290,28 +304,42 @@ class GeminiAiPlanner {
                 matchedContact = matchedContact,
                 savedContactsSummary = savedContactsSummary,
                 chatGuardHint = chatGuardHint,
-                carromMemorySummary = carromMemorySummary
+                carromMemorySummary = carromMemorySummary,
+                subGoalChecklist = subGoalChecklist,
+                actionReflectorHint = actionReflectorHint
             )
 
+            val interactiveNodes = snapshot.nodes.count { it.isClickable || it.isEditable }
             val (taskProfile, attachScreenshot) = resolveVisionStrategy(
                 settings = settings,
-                interactiveNodes = snapshot.nodes.count { it.isClickable || it.isEditable },
+                interactiveNodes = interactiveNodes,
                 lastOutcomeHint = lastOutcomeHint,
                 stepNumber = stepNumber,
                 forceVision = forceVision
             )
             val effectiveScreenshot = if (attachScreenshot) snapshot.screenshot else null
 
-            val annotatedCopy = if (
-                effectiveScreenshot != null &&
-                settings.useCoordinateGridOverlay &&
-                taskProfile == AiTaskProfile.HIGH_ACCURACY
-            ) {
-                VisualGridAnnotator.createAnnotatedCopy(
-                    source = effectiveScreenshot,
-                    screenWidth = snapshot.screenWidth,
-                    screenHeight = snapshot.screenHeight
-                )
+            val annotatedCopy = if (effectiveScreenshot != null) {
+                when {
+                    (forceVision || interactiveNodes < 5) &&
+                        settings.useCoordinateGridOverlay &&
+                        taskProfile == AiTaskProfile.HIGH_ACCURACY -> {
+                        VisualGridAnnotator.createAnnotatedCopy(
+                            source = effectiveScreenshot,
+                            screenWidth = snapshot.screenWidth,
+                            screenHeight = snapshot.screenHeight
+                        )
+                    }
+                    !forceVision && settings.useSetOfMarkOverlay && interactiveNodes >= 2 -> {
+                        VisualGridAnnotator.createSetOfMarkCopy(
+                            source = effectiveScreenshot,
+                            screenWidth = snapshot.screenWidth,
+                            screenHeight = snapshot.screenHeight,
+                            nodes = snapshot.nodes
+                        )
+                    }
+                    else -> null
+                }
             } else {
                 null
             }
@@ -415,6 +443,8 @@ class GeminiAiPlanner {
             null
         }
         val memoryNote = optCleanString(json, "memoryNote")
+        val subGoalChecklist = optCleanString(json, "subGoalChecklist")
+        val reflectionStatus = optCleanString(json, "reflectionStatus")
         val learnedRule = optCleanString(json, "learnedRule")
         val foulOrMistakeLesson = optCleanString(json, "foulOrMistakeLesson")
         val reason = json.optString("reason", "Proceeding with goal.")
@@ -431,6 +461,8 @@ class GeminiAiPlanner {
             textToType = textToType,
             waitSeconds = waitSeconds,
             memoryNote = memoryNote,
+            subGoalChecklist = subGoalChecklist,
+            reflectionStatus = reflectionStatus,
             learnedRule = learnedRule,
             foulOrMistakeLesson = foulOrMistakeLesson,
             reason = reason,
@@ -486,7 +518,9 @@ class GeminiAiPlanner {
         matchedContact: ContactProfile?,
         savedContactsSummary: String,
         chatGuardHint: String,
-        carromMemorySummary: String
+        carromMemorySummary: String,
+        subGoalChecklist: String,
+        actionReflectorHint: String
     ): String {
         val historyBlock = if (recentHistory.isEmpty()) {
             "None yet (first step)."
@@ -506,6 +540,8 @@ class GeminiAiPlanner {
 
         val stepLabel = if (maxSteps != null) "$stepNumber of $maxSteps" else "$stepNumber (Continuous Monitor)"
         val memoryBlock = workingMemory.ifBlank { "No prior working memory yet." }
+        val checklistBlock = subGoalChecklist.ifBlank { "Not initialized yet — create '[ ] Step 1 | [ ] Step 2 | ...' now if task has multiple parts." }
+        val reflectorBlock = actionReflectorHint.ifBlank { "First step or normal transition." }
         val playbookBlock = playbook?.formatForPrompt() ?: "No persistent playbook saved yet."
         val outcomeBlock = lastOutcomeHint.ifBlank { "First observation — no prior gesture result yet." }
         val nodeTreeText = NodeTreeParser.formatNodesForPrompt(snapshot.nodes)
@@ -534,6 +570,12 @@ class GeminiAiPlanner {
             FOREGROUND PACKAGE: ${snapshot.packageName}
             SCREEN RESOLUTION: ${snapshot.screenWidth}x${snapshot.screenHeight}
             CAPTURE STATUS: ${snapshot.captureNote}
+
+            MANAGER SUB-GOAL CHECKLIST:
+            $checklistBlock
+
+            ACTION REFLECTOR CHECK:
+            $reflectorBlock
 
             MATCHED CONTACT & RELATIONSHIP PERSONA:
             $contactProfileSection

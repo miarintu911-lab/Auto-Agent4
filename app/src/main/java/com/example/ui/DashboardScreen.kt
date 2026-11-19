@@ -57,6 +57,7 @@ import com.example.agent.AgentExecutionMode
 import com.example.agent.AgentStepLog
 import com.example.agent.AgentUiState
 import com.example.agent.ContactProfile
+import com.example.agent.NotificationReplyHelper
 import com.example.ui.theme.CyberTeal
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.ObsidianBg
@@ -85,6 +86,7 @@ fun DashboardScreen(viewModel: AgentViewModel) {
     var editingContact by remember { mutableStateOf<ContactProfile?>(null) }
     var autoRequestedProjectionThisSession by rememberSaveable { mutableStateOf(false) }
     var launchPendingAfterProjection by remember { mutableStateOf(false) }
+    var pendingBgAutoReplyLaunch by remember { mutableStateOf(false) }
 
     val mediaProjectionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -120,7 +122,12 @@ fun DashboardScreen(viewModel: AgentViewModel) {
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ ->
-        proceedWithLaunchOrProjection()
+        if (pendingBgAutoReplyLaunch) {
+            pendingBgAutoReplyLaunch = false
+            viewModel.startBackgroundNotificationAutoReply()
+        } else {
+            proceedWithLaunchOrProjection()
+        }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -144,9 +151,7 @@ fun DashboardScreen(viewModel: AgentViewModel) {
     }
 
     fun handleLaunchClick() {
-        if (executionMode == AgentExecutionMode.CONTINUOUS_MONITOR &&
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-        ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
                 context,
                 Manifest.permission.POST_NOTIFICATIONS
@@ -157,6 +162,21 @@ fun DashboardScreen(viewModel: AgentViewModel) {
             }
         }
         proceedWithLaunchOrProjection()
+    }
+
+    fun handleStartBgAutoReplyClick() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                pendingBgAutoReplyLaunch = true
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
+            }
+        }
+        viewModel.startBackgroundNotificationAutoReply()
     }
 
     fun toggleLiveStream() {
@@ -249,6 +269,24 @@ fun DashboardScreen(viewModel: AgentViewModel) {
                         onPause = viewModel::pauseAgent,
                         onResume = viewModel::resumeAgent,
                         onStop = viewModel::stopAgent
+                    )
+                }
+
+                item {
+                    val isBgAutoReplyRunning = (agentState is AgentUiState.Running &&
+                        NotificationReplyHelper.isAllPlatformAutoReplyGoal((agentState as AgentUiState.Running).goal)) ||
+                        (agentState is AgentUiState.Paused &&
+                            NotificationReplyHelper.isAllPlatformAutoReplyGoal((agentState as AgentUiState.Paused).goal))
+                    val isOtherTaskBusy = !isBgAutoReplyRunning &&
+                        (agentState is AgentUiState.Running ||
+                            agentState is AgentUiState.Paused ||
+                            agentState is AgentUiState.AwaitingConfirmation)
+                    BackgroundAutoReplyQuickCard(
+                        isServiceActive = serviceActive,
+                        isRunningThisMode = isBgAutoReplyRunning,
+                        isOtherTaskBusy = isOtherTaskBusy,
+                        onStartBgAutoReply = ::handleStartBgAutoReplyClick,
+                        onStopBgAutoReply = viewModel::stopAgent
                     )
                 }
 

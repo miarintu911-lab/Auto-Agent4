@@ -58,4 +58,73 @@ object VisualGridAnnotator {
 
         return copy
     }
+
+    /**
+     * Draws AppAgent / DroidRun-style Set-of-Mark (SoM) numbered bounding boxes over
+     * interactive UI elements onto a copy of the screenshot so VLMs accurately ground
+     * exact buttons and text fields without coordinate drift.
+     */
+    fun createSetOfMarkCopy(
+        source: Bitmap,
+        screenWidth: Int,
+        screenHeight: Int,
+        nodes: List<com.example.agent.ScreenNode>
+    ): Bitmap {
+        val copy = source.copy(Bitmap.Config.ARGB_8888, true)
+        if (nodes.isEmpty() || screenWidth <= 0 || screenHeight <= 0) return copy
+
+        val canvas = Canvas(copy)
+        val scaleX = copy.width.toFloat() / screenWidth.toFloat()
+        val scaleY = copy.height.toFloat() / screenHeight.toFloat()
+
+        val palette = intArrayOf(
+            Color.rgb(0, 229, 255),
+            Color.rgb(255, 193, 7),
+            Color.rgb(255, 82, 162),
+            Color.rgb(124, 179, 255)
+        )
+        val editableColor = Color.rgb(0, 230, 118)
+
+        val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (copy.width * 0.003f).coerceIn(1.8f, 3.5f)
+        }
+        val tagBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+        val tagTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            textSize = (copy.width * 0.024f).coerceIn(13f, 22f)
+            isFakeBoldText = true
+        }
+
+        val interactiveNodes = nodes.filter {
+            it.isClickable || it.isEditable || it.isChecked
+        }.take(60)
+
+        interactiveNodes.forEachIndexed { idx, node ->
+            val left = (node.bounds.left * scaleX).coerceIn(1f, copy.width - 2f)
+            val top = (node.bounds.top * scaleY).coerceIn(1f, copy.height - 2f)
+            val right = (node.bounds.right * scaleX).coerceIn(left + 4f, copy.width - 1f)
+            val bottom = (node.bounds.bottom * scaleY).coerceIn(top + 4f, copy.height - 1f)
+
+            val boxColor = if (node.isEditable) editableColor else palette[idx % palette.size]
+            boxPaint.color = boxColor
+            tagBgPaint.color = boxColor
+
+            canvas.drawRect(left, top, right, bottom, boxPaint)
+
+            val label = "${node.id}"
+            val tw = tagTextPaint.measureText(label)
+            val pillW = tw + 8f
+            val pillH = tagTextPaint.textSize + 5f
+            val pillLeft = left.coerceAtMost((copy.width - pillW - 1f).coerceAtLeast(1f))
+            val pillTop = (top - pillH * 0.35f).coerceIn(1f, (copy.height - pillH - 1f).coerceAtLeast(1f))
+
+            canvas.drawRect(pillLeft, pillTop, pillLeft + pillW, pillTop + pillH, tagBgPaint)
+            canvas.drawText(label, pillLeft + 4f, pillTop + pillH - 4f, tagTextPaint)
+        }
+
+        return copy
+    }
 }

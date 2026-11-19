@@ -7,8 +7,9 @@ import com.example.agent.ScreenNode
 
 object NodeTreeParser {
 
-    private const val MAX_NODES = 85
-    private const val MAX_DEPTH = 20
+    private const val MAX_NODES = 140
+    private const val MAX_SCAN_CANDIDATES = 320
+    private const val MAX_DEPTH = 26
 
     fun extractNodes(
         root: AccessibilityNodeInfo?,
@@ -17,11 +18,11 @@ object NodeTreeParser {
         excludedPackage: String
     ): List<ScreenNode> {
         if (root == null) return emptyList()
-        val results = mutableListOf<ScreenNode>()
-        var nextId = 1
+        val rawCandidates = mutableListOf<ScreenNode>()
+        var scanOrder = 0
 
         fun traverse(node: AccessibilityNodeInfo?, depth: Int) {
-            if (node == null || depth > MAX_DEPTH || results.size >= MAX_NODES) return
+            if (node == null || depth > MAX_DEPTH || rawCandidates.size >= MAX_SCAN_CANDIDATES) return
 
             val pkg = node.packageName?.toString().orEmpty()
             if (pkg == excludedPackage) return
@@ -49,9 +50,9 @@ object NodeTreeParser {
                     )
 
                 if (isMeaningful) {
-                    results.add(
+                    rawCandidates.add(
                         ScreenNode(
-                            id = nextId++,
+                            id = scanOrder++,
                             className = node.className?.toString().orEmpty(),
                             text = text.take(120),
                             contentDesc = desc.take(120),
@@ -74,7 +75,7 @@ object NodeTreeParser {
 
             val childCount = node.childCount
             for (i in 0 until childCount) {
-                if (results.size >= MAX_NODES) break
+                if (rawCandidates.size >= MAX_SCAN_CANDIDATES) break
                 val child = node.getChild(i)
                 if (child != null) {
                     traverse(child, depth + 1)
@@ -83,7 +84,24 @@ object NodeTreeParser {
         }
 
         traverse(root, 0)
-        return results
+
+        val selected = if (rawCandidates.size <= MAX_NODES) {
+            rawCandidates
+        } else {
+            val interactive = rawCandidates.filter {
+                it.isClickable || it.isEditable || it.isScrollable || it.isChecked || it.isFocused
+            }
+            val passive = rawCandidates.filterNot {
+                it.isClickable || it.isEditable || it.isScrollable || it.isChecked || it.isFocused
+            }
+            val keepSet = LinkedHashSet<Int>(MAX_NODES)
+            interactive.take(MAX_NODES).forEach { keepSet.add(it.id) }
+            val remainingSlots = (MAX_NODES - keepSet.size).coerceAtLeast(0)
+            passive.take(remainingSlots).forEach { keepSet.add(it.id) }
+            rawCandidates.filter { it.id in keepSet }
+        }
+
+        return selected.mapIndexed { idx, node -> node.copy(id = idx + 1) }
     }
 
     fun formatNodesForPrompt(nodes: List<ScreenNode>): String {

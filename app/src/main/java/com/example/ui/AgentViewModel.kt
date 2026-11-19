@@ -111,6 +111,14 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         AgentCoordinator.startTask(_goalText.value, _executionMode.value)
     }
 
+    fun startBackgroundNotificationAutoReply() {
+        refreshAccessibilityStatus()
+        val bgGoal = com.example.agent.NotificationReplyHelper.ALL_PLATFORM_BG_GOAL
+        _executionMode.value = AgentExecutionMode.CONTINUOUS_MONITOR
+        _goalText.value = bgGoal
+        AgentCoordinator.startTask(bgGoal, AgentExecutionMode.CONTINUOUS_MONITOR)
+    }
+
     fun pauseAgent() {
         AgentCoordinator.pauseTask()
     }

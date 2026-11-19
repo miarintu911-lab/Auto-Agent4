@@ -51,6 +51,8 @@
     <string name="settings_carrom_solver_desc">Computes Ghost-Ball cut angles, blocked-path checks, foul guards, and rolling-coin waits locally with 0 API calls.</string>
     <string name="settings_coordinate_grid_label">AI Coordinate Grid Vision</string>
     <string name="settings_coordinate_grid_desc">Draws subtle X/Y pixel reference lines on game screenshots so AI reads exact coordinates.</string>
+    <string name="settings_set_of_mark_label">Set-of-Mark (SoM) Visual Grounding</string>
+    <string name="settings_set_of_mark_desc">Draws numbered [1], [2], [3] bounding boxes on buttons &amp; fields in AI screenshots (AppAgent / DroidRun style) to eliminate mis-taps.</string>
     <string name="settings_bulk_upload_file">Bulk Upload (.txt/.csv/.json)</string>
     <string name="settings_bulk_auto_sort">Auto-Sort Mixed Keys</string>
     <string name="settings_reset_key_health">Reset Key Health</string>
@@ -121,4 +123,10 @@
     <string name="settings_carrom_rule_label">Carrom Game Rule Mode</string>
     <string name="settings_carrom_rule_freestyle_desc">Freestyle: White, Black &amp; Red (Queen) are all legal targets — ONLY striker pocket scratch is a foul.</string>
     <string name="settings_carrom_rule_discpool_desc">Disc Pool: Only your selected coin color &amp; Red (Queen) are targeted; pocketing only opponent coins or scratching is a foul.</string>
+    <string name="bg_auto_reply_title">Always-On All-Platform Auto-Reply</string>
+    <string name="bg_auto_reply_desc">Stays running in background. Whenever any app shows a message notification, opens that sender, checks Relationship Contacts first, or talks simply &amp; politely if unsaved.</string>
+    <string name="action_start_bg_auto_reply">Start Background Auto-Reply</string>
+    <string name="action_stop_bg_auto_reply">Background Service Active (Stop)</string>
+    <string name="settings_floating_overlay_label">Floating On-Screen Overlay</string>
+    <string name="settings_floating_overlay_desc">Show draggable Pause/Stop box over apps. Keep OFF (default) to show status and controls only in the notification panel without blocking the screen.</string>
 </resources>
