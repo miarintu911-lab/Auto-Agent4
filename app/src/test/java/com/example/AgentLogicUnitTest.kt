@@ -2268,6 +2268,86 @@ class AgentLogicUnitTest {
         assertEquals("Hello there!", obs.lastMessageText)
         assertFalse(AgentSettings().showFloatingOverlay)
     }
+
+    @Test
+    fun `chat turn guard distinguishes ME vs THEM history bubbles and generates human style mirror hint`() {
+        fun bubbleNode(id: Int, text: String, top: Int, left: Int, right: Int) = ScreenNode(
+            id = id,
+            className = "android.widget.TextView",
+            text = text,
+            contentDesc = "",
+            viewId = "msg_text",
+            bounds = ScreenBounds(left, top, right, top + 75),
+            isClickable = false,
+            isEditable = false,
+            isScrollable = false,
+            isChecked = false,
+            isFocused = false
+        )
+
+        val snapshotWithHistory = com.example.agent.UiSnapshot(
+            packageName = "com.whatsapp",
+            screenWidth = 1080,
+            screenHeight = 2400,
+            nodes = listOf(
+                ScreenNode(
+                    id = 1,
+                    className = "android.widget.TextView",
+                    text = "Sakib",
+                    contentDesc = "",
+                    viewId = "conversation_contact_name",
+                    bounds = ScreenBounds(140, 120, 420, 185),
+                    isClickable = false,
+                    isEditable = false,
+                    isScrollable = false,
+                    isChecked = false,
+                    isFocused = false
+                ),
+                // Left-aligned THEM bubble
+                bubbleNode(2, "Mama koi tui?", top = 700, left = 60, right = 440),
+                // Right-aligned ME bubble
+                bubbleNode(3, "Ei to basay re mama, tor ki khobor?", top = 840, left = 420, right = 1020),
+                // Left-aligned THEM latest bubble
+                bubbleNode(4, "Baire ber hobi naki?", top = 980, left = 60, right = 480),
+                ScreenNode(
+                    id = 5,
+                    className = "android.widget.EditText",
+                    text = "Message",
+                    contentDesc = "",
+                    viewId = "entry",
+                    bounds = ScreenBounds(120, 2100, 860, 2220),
+                    isClickable = true,
+                    isEditable = true,
+                    isScrollable = false,
+                    isChecked = false,
+                    isFocused = true
+                )
+            ),
+            screenshot = null,
+            captureNote = ""
+        )
+
+        val obs = com.example.agent.ChatTurnGuard.extractChatObservation(snapshotWithHistory)
+        assertEquals(3, obs.recentBubbles.size)
+        assertEquals("THEM", obs.recentBubbles[0].speaker)
+        assertEquals("ME", obs.recentBubbles[1].speaker)
+        assertEquals("THEM", obs.recentBubbles[2].speaker)
+
+        val styleHint = com.example.agent.ChatTurnGuard.buildChatStyleHistoryHint(obs)
+        assertTrue(styleHint.contains("[ME]: \"Ei to basay re mama, tor ki khobor?\""))
+        assertTrue(styleHint.contains("[THEM]: \"Baire ber hobi naki?\""))
+        assertTrue(styleHint.contains("Banglish/English"))
+        assertTrue(styleHint.contains("NOT an AI"))
+
+        // When no [ME] bubbles are visible yet and thread is sparse, hint allows 1 optional SCROLL_UP
+        val sparseObs = obs.copy(
+            recentBubbles = listOf(com.example.agent.ChatTurnGuard.ChatBubble("THEM", "কেমন আছেন?")),
+            transcriptLines = listOf("কেমন আছেন?")
+        )
+        val scrollHint = com.example.agent.ChatTurnGuard.buildChatStyleHistoryHint(sparseObs, alreadyScrolledHistory = false)
+        assertTrue(scrollHint.contains("SCROLL_UP ONCE"))
+        assertTrue(scrollHint.contains("Bangla Unicode"))
+    }
 }
 
 

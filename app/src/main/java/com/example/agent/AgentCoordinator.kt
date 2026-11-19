@@ -284,6 +284,12 @@ object AgentCoordinator {
                     playbookTopicKey = activePlaybook?.topicKey
                 )
 
+                val isNotifAutoReplyAtStart = NotificationReplyHelper.isNotificationDrivenAutoReplyGoal(
+                    goal = goal,
+                    mode = mode,
+                    settings = initialSettings
+                ) || NotificationReplyHelper.isAllPlatformAutoReplyGoal(goal)
+
                 if (activePlaybook == null && isCarromTaskGoal) {
                     val effectiveRuleAtStart = resolveCarromRuleMode(goal, initialSettings.carromRuleMode)
                     val builtIn = CarromContextHelper.buildDefaultCarromPlaybook(effectiveRuleAtStart)
@@ -301,6 +307,8 @@ object AgentCoordinator {
                             requiresConfirmation = false
                         )
                     )
+                } else if (isNotifAutoReplyAtStart) {
+                    workingMemory = "Listening in background for incoming message notifications (0 API calls while idle)."
                 } else if (activePlaybook == null && initialSettings.autoResearchBeforeTask) {
                     _uiState.value = AgentUiState.Running(
                         goal = goal,
@@ -401,6 +409,8 @@ object AgentCoordinator {
                 var consecutiveNoChangeCount = 0
                 var activeSubGoalChecklist = ""
                 var completionGuardOverrides = 0
+                var directLaunchedTargetKey: String? = null
+                val historyScrolledPeers = mutableSetOf<String>()
                 CarromVisionDetector.resetMotionHistory()
 
                 while (maxStepsLimit == null || step <= maxStepsLimit) {
@@ -423,18 +433,6 @@ object AgentCoordinator {
                         awaitIfPaused(goal, mode, step, maxStepsLimit, workingMemory, trace)
                     }
 
-                    _uiState.value = AgentUiState.Running(
-                        goal = goal,
-                        mode = mode,
-                        currentStep = step,
-                        maxSteps = maxStepsLimit,
-                        phase = AgentPhase.OBSERVING,
-                        lastThought = trace.lastOrNull()?.reason.orEmpty(),
-                        workingMemory = workingMemory,
-                        trace = trace.toList()
-                    )
-
-                    val snapshot = service.captureSnapshot(currentSettings.useVisionScreenshot)
                     val notificationsSnapshot = synchronized(recentNotifications) {
                         recentNotifications.toList()
                     }
@@ -507,6 +505,66 @@ object AgentCoordinator {
                     val currentActiveTarget = activeReplyTarget
                     val targetAppOverride = currentActiveTarget?.appDisplayName
                     val shouldWaitForIncomingNotification = isNotifDrivenAutoReply && currentActiveTarget == null
+
+                    if (shouldWaitForIncomingNotification) {
+                        val idleReason = "Waiting silently for incoming message notification (0 API calls)..."
+                        appendTrace(
+                            trace,
+                            AgentStepLog(
+                                stepNumber = step,
+                                timestampMs = System.currentTimeMillis(),
+                                actionType = AgentActionType.WAIT,
+                                targetSummary = "Wait ${currentSettings.monitorIntervalSec}s (wakes on notification)",
+                                reason = idleReason,
+                                status = StepStatus.WAITING,
+                                requiresConfirmation = false
+                            )
+                        )
+                        sleepMonitorInterval(
+                            goal = goal,
+                            mode = mode,
+                            step = step,
+                            maxSteps = maxStepsLimit,
+                            waitSec = currentSettings.monitorIntervalSec,
+                            reason = idleReason,
+                            workingMemory = workingMemory,
+                            trace = trace
+                        )
+                        step++
+                        continue
+                    }
+
+                    // Fast direct-launch path: open the exact notification app immediately (< 0.7s) without 4-step launcher search
+                    if (currentActiveTarget != null && directLaunchedTargetKey != currentActiveTarget.targetKey) {
+                        directLaunchedTargetKey = currentActiveTarget.targetKey
+                        val launchedDirect = appContext?.let { tryLaunchPackage(it, currentActiveTarget.packageName) } == true
+                        if (launchedDirect) {
+                            _uiState.value = AgentUiState.Running(
+                                goal = goal,
+                                mode = mode,
+                                currentStep = step,
+                                maxSteps = maxStepsLimit,
+                                phase = AgentPhase.ACTING,
+                                lastThought = "Opening ${currentActiveTarget.appDisplayName} for '${currentActiveTarget.senderName}'...",
+                                workingMemory = workingMemory,
+                                trace = trace.toList()
+                            )
+                            delay(650L)
+                        }
+                    }
+
+                    _uiState.value = AgentUiState.Running(
+                        goal = goal,
+                        mode = mode,
+                        currentStep = step,
+                        maxSteps = maxStepsLimit,
+                        phase = AgentPhase.OBSERVING,
+                        lastThought = trace.lastOrNull()?.reason.orEmpty(),
+                        workingMemory = workingMemory,
+                        trace = trace.toList()
+                    )
+
+                    val snapshot = service.captureSnapshot(currentSettings.useVisionScreenshot)
 
                     val currentSig = ActionCacheStore.computeScreenSignature(snapshot.nodes)
                     val currentCompositeScreen = "${snapshot.packageName}::$currentSig"
@@ -725,6 +783,16 @@ object AgentCoordinator {
                             }
                             if (chatObs.lastMessageText.isNotBlank()) {
                                 append(", LatestVisibleBubble='${chatObs.lastMessageText.take(80)}'")
+                            }
+                            if (chatObs.inChatThread) {
+                                val peerHistoryKey = ChatTurnGuard.peerKey(snapshot.packageName, chatObs.peerName)
+                                val historyHint = ChatTurnGuard.buildChatStyleHistoryHint(
+                                    obs = chatObs,
+                                    alreadyScrolledHistory = peerHistoryKey in historyScrolledPeers
+                                )
+                                if (historyHint.isNotBlank()) {
+                                    append(" | $historyHint")
+                                }
                             }
                             if (activeAwaitingReply != null && currentSettings.preventDoubleText) {
                                 append(" | ANTI-DOUBLE-TEXT LOCKED: You already sent '${activeAwaitingReply.lastSentText.take(60)}' and NO reply has arrived yet. You MUST return WAIT.")
@@ -1631,6 +1699,9 @@ object AgentCoordinator {
 
                     if (execResult.success && chatObs.isMessagingApp) {
                         val peerKeyForAction = ChatTurnGuard.peerKey(snapshot.packageName, chatObs.peerName)
+                        if (chatObs.inChatThread && plannedAction.actionType == AgentActionType.SCROLL_UP) {
+                            historyScrolledPeers.add(peerKeyForAction)
+                        }
                         if (plannedAction.actionType == AgentActionType.INPUT_TEXT && !plannedAction.textToType.isNullOrBlank()) {
                             pendingSentTextForPeer = peerKeyForAction to plannedAction.textToType.trim()
                         } else if (ChatTurnGuard.isChatSendAction(plannedAction, targetNode, snapshot)) {
@@ -1710,6 +1781,7 @@ object AgentCoordinator {
                         usedLocalCarromSolver && didSlideCarromThisStep && LiveMediaProjectionCapturer.isLiveActive.value -> 85L
                         usedLocalCarromSolver && didSlideCarromThisStep -> 130L
                         LiveMediaProjectionCapturer.isLiveActive.value && usedLocalCarromSolver -> 460L
+                        cacheMatch != null || launcherDecision != null -> minOf(currentSettings.stepDelayMs, 550L)
                         else -> currentSettings.stepDelayMs
                     }
                     delay(effectiveDelayMs)
@@ -1922,6 +1994,18 @@ object AgentCoordinator {
         }
     }
 
+    private fun tryLaunchPackage(context: Context, packageName: String): Boolean {
+        if (packageName.isBlank()) return false
+        val pm = context.packageManager
+        val launchIntent = runCatching { pm.getLaunchIntentForPackage(packageName) }.getOrNull() ?: return false
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        return runCatching {
+            context.startActivity(launchIntent)
+            Log.i(TAG, "Direct-launched package: $packageName")
+            true
+        }.getOrDefault(false)
+    }
+
     private fun tryLaunchInstalledCarromApp(context: Context): Boolean {
         val candidatePackages = listOf(
             "com.miniclip.carrom",
@@ -1930,16 +2014,9 @@ object AgentCoordinator {
             "com.gametion.carromking",
             "com.appsoleutgames.carrom"
         )
-        val pm = context.packageManager
         for (pkg in candidatePackages) {
-            val launchIntent = runCatching { pm.getLaunchIntentForPackage(pkg) }.getOrNull()
-            if (launchIntent != null) {
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-                val started = runCatching { context.startActivity(launchIntent) }.isSuccess
-                if (started) {
-                    Log.i(TAG, "Auto-launched installed Carrom package: $pkg")
-                    return true
-                }
+            if (tryLaunchPackage(context, pkg)) {
+                return true
             }
         }
         return false

@@ -57,6 +57,11 @@ object ChatTurnGuard {
     private val PERCENT_ONLY_REGEX = Regex("^\\d{1,3}%$")
     private val COMPOSE_HINT_REGEX = Regex("(message|type a message|aa|write a message|মেসেজ|বার্তা)", RegexOption.IGNORE_CASE)
 
+    data class ChatBubble(
+        val speaker: String, // "ME", "THEM", or "MSG"
+        val text: String
+    )
+
     data class ChatObservation(
         val isMessagingApp: Boolean,
         val inChatThread: Boolean,
@@ -64,7 +69,8 @@ object ChatTurnGuard {
         val peerName: String,
         val transcriptLines: List<String>,
         val lastMessageText: String,
-        val transcriptSignature: String
+        val transcriptSignature: String,
+        val recentBubbles: List<ChatBubble> = emptyList()
     )
 
     data class AwaitingReplyState(
@@ -167,8 +173,8 @@ object ChatTurnGuard {
             ?.first
             .orEmpty()
 
-        // Collect message transcript bubbles inside the middle region
-        val transcriptLines = snapshot.nodes
+        // Collect message transcript bubbles inside the middle region with left/right speaker side detection
+        val rawBubbles = snapshot.nodes
             .asSequence()
             .filter { node ->
                 !node.isEditable &&
@@ -182,11 +188,13 @@ object ChatTurnGuard {
                 if (raw.equals(headerCandidate, ignoreCase = true)) return@mapNotNull null
                 if (isReceiptOrNoise(raw)) return@mapNotNull null
                 if (COMPOSE_HINT_REGEX.matches(raw)) return@mapNotNull null
-                raw
+                val speaker = classifyBubbleSpeaker(node, w)
+                ChatBubble(speaker = speaker, text = raw)
             }
-            .distinct()
+            .distinctBy { it.text }
             .toList()
 
+        val transcriptLines = rawBubbles.map { it.text }
         val lastMessage = transcriptLines.lastOrNull().orEmpty()
         val sig = transcriptLines.takeLast(8).joinToString("|").hashCode().toString()
 
@@ -197,8 +205,62 @@ object ChatTurnGuard {
             peerName = headerCandidate,
             transcriptLines = transcriptLines,
             lastMessageText = lastMessage,
-            transcriptSignature = sig
+            transcriptSignature = sig,
+            recentBubbles = rawBubbles.takeLast(14)
         )
+    }
+
+    private fun classifyBubbleSpeaker(node: ScreenNode, screenWidth: Float): String {
+        val centerX = node.bounds.centerX.toFloat()
+        return when {
+            centerX >= screenWidth * 0.56f && node.bounds.left >= screenWidth * 0.25f -> "ME"
+            centerX <= screenWidth * 0.44f && node.bounds.right <= screenWidth * 0.78f -> "THEM"
+            else -> "MSG"
+        }
+    }
+
+    fun buildChatStyleHistoryHint(
+        obs: ChatObservation,
+        alreadyScrolledHistory: Boolean = false
+    ): String {
+        if (!obs.isMessagingApp || !obs.inChatThread) return ""
+        val bubbles = obs.recentBubbles
+        val myPastLines = bubbles.filter { it.speaker == "ME" }.map { it.text }
+        val theirLines = bubbles.filter { it.speaker == "THEM" }.map { it.text }
+
+        val formattedHistory = if (bubbles.isEmpty()) {
+            "No prior messages visible yet."
+        } else {
+            bubbles.takeLast(12).joinToString(" || ") { bubble ->
+                "[${bubble.speaker}]: \"${bubble.text.take(90)}\""
+            }
+        }
+
+        val sampleForScript = (myPastLines + theirLines + obs.transcriptLines).joinToString(" ")
+        val hasBengaliScript = sampleForScript.any { it in '\u0980'..'\u09FF' }
+        val hasLatinLetters = sampleForScript.any { it in 'a'..'z' || it in 'A'..'Z' }
+        val avgMyLen = if (myPastLines.isNotEmpty()) {
+            myPastLines.map { it.length }.average().toInt()
+        } else {
+            0
+        }
+
+        val styleGuide = buildString {
+            when {
+                hasBengaliScript && !hasLatinLetters -> append("Script observed: Bangla Unicode. ")
+                !hasBengaliScript && hasLatinLetters -> append("Script observed: Banglish/English (match exact style!). ")
+                hasBengaliScript && hasLatinLetters -> append("Script observed: Mixed Bangla + Banglish/English. ")
+            }
+            if (myPastLines.isNotEmpty()) {
+                append("User's real past tone ([ME] avg ${avgMyLen} chars): MIRROR exact pronouns (tui/tumi/apni), slang, brevity & emoji level so it sounds 100% like the human owner, NOT an AI. ")
+            } else if (!alreadyScrolledHistory && bubbles.size <= 3) {
+                append("No [ME] past messages visible on screen yet — if tone/relationship feels unclear, you may SCROLL_UP ONCE to check older chat history before replying, otherwise match [THEM]'s exact script & casual natural brevity. ")
+            } else {
+                append("Mirror [THEM]'s exact script, pronoun respect, and short natural texting style — NEVER write formal AI paragraphs. ")
+            }
+        }.trim()
+
+        return "VISIBLE CHAT HISTORY: $formattedHistory | STYLE MIRROR: $styleGuide"
     }
 
     fun isChatSendAction(
