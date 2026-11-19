@@ -1,8 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:width="66dp"
-        android:height="66dp"
-        android:drawable="@drawable/tappilot_icon_fg_1795018060662"
-        android:gravity="center" />
-</layer-list>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer target ring (within 66dp safe zone: radius 23 around 54,54) -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M54,31A23,23 0 1,0 54,77A23,23 0 1,0 54,31Z"
+        android:strokeColor="#2CF6B3"
+        android:strokeWidth="3.2" />
+
+    <!-- Inner target ring -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M54,40A14,14 0 1,0 54,68A14,14 0 1,0 54,40Z"
+        android:strokeColor="#2CF6B3"
+        android:strokeWidth="2.6" />
+
+    <!-- Cardinal crosshair ticks -->
+    <path
+        android:pathData="M54,27L54,38M54,70L54,81M27,54L38,54M70,54L81,54"
+        android:strokeColor="#2CF6B3"
+        android:strokeLineCap="round"
+        android:strokeWidth="3" />
+
+    <!-- Center bullseye -->
+    <path
+        android:fillColor="#2CF6B3"
+        android:pathData="M54,50A4,4 0 1,0 54,58A4,4 0 1,0 54,50Z" />
+
+    <!-- Dark knockout halo behind pointer arrow for clean contrast -->
+    <path
+        android:fillColor="#0A0F13"
+        android:pathData="M55,55L81,66L69.5,69.5L66,81Z"
+        android:strokeColor="#0A0F13"
+        android:strokeLineJoin="round"
+        android:strokeWidth="4.2" />
+
+    <!-- Precision TapPilot pointer arrow -->
+    <path
+        android:fillColor="#2CF6B3"
+        android:pathData="M56,56L79,66L68.8,68.8L66,79Z" />
+</vector>
