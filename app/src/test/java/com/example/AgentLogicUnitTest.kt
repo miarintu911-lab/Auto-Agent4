@@ -1710,5 +1710,174 @@ class AgentLogicUnitTest {
         org.junit.Assert.assertNotNull(safeBreak)
         assertFalse(safeBreak!!.rejectedDueToCollisionOrFoul)
     }
+
+    @Test
+    fun `launcher search helper navigates home to app drawer searches exact app name and detects wrong app`() {
+        fun node(
+            id: Int,
+            text: String,
+            desc: String = "",
+            viewId: String = "",
+            clickable: Boolean = true,
+            editable: Boolean = false,
+            top: Int = 400,
+            bottom: Int = 560,
+            left: Int = 100,
+            right: Int = 300
+        ) = ScreenNode(
+            id = id,
+            className = if (editable) "android.widget.EditText" else "android.widget.TextView",
+            text = text,
+            contentDesc = desc,
+            viewId = viewId,
+            bounds = ScreenBounds(left, top, right, bottom),
+            isClickable = clickable,
+            isEditable = editable,
+            isScrollable = false,
+            isChecked = false,
+            isFocused = editable
+        )
+
+        // Extracts canonical Samsung One UI app labels from English & Bengali prompts
+        assertEquals("Lite", com.example.agent.LauncherSearchHelper.extractTargetAppName("Facebook Lite এ গিয়ে মেসেজ দেখো"))
+        assertEquals("WhatsApp", com.example.agent.LauncherSearchHelper.extractTargetAppName("হোয়াটসঅ্যাপ এ গিয়ে রিয়াদকে হাই দাও"))
+        assertEquals("Nagad", com.example.agent.LauncherSearchHelper.extractTargetAppName("Nagad এ্যাপ ওপেন করো"))
+        assertEquals("YouTube", com.example.agent.LauncherSearchHelper.extractTargetAppName("Open YouTube and scroll videos"))
+
+        // Step 1: On Home screen -> swipes up to open App Drawer
+        val homeSnapshot = com.example.agent.UiSnapshot(
+            packageName = "com.sec.android.app.launcher",
+            screenWidth = 1080,
+            screenHeight = 2400,
+            nodes = listOf(node(1, "Phone", top = 1900, bottom = 2100)),
+            screenshot = null,
+            captureNote = ""
+        )
+        val step1 = com.example.agent.LauncherSearchHelper.planNextLauncherSearchStep(
+            goal = "Facebook Lite এ গিয়ে নিউজফিড স্ক্রল করো",
+            snapshot = homeSnapshot,
+            alreadyOpenedDrawer = false,
+            alreadyTappedSearch = false,
+            alreadyTypedSearch = false
+        )
+        org.junit.Assert.assertNotNull(step1)
+        assertEquals(AgentActionType.DRAG, step1!!.action.actionType)
+        assertEquals("OPEN_APP_DRAWER", step1.stageTag)
+
+        // Step 2: On One UI App Drawer screenshot (with Search pill at bottom) -> taps Search bar
+        val drawerSnapshot = com.example.agent.UiSnapshot(
+            packageName = "com.sec.android.app.launcher",
+            screenWidth = 1080,
+            screenHeight = 2400,
+            nodes = listOf(
+                node(1, "My Galaxy", top = 280, bottom = 460),
+                node(2, "Lite", top = 280, bottom = 460),
+                node(3, "WhatsApp", top = 620, bottom = 800),
+                node(4, "Nagad", top = 1320, bottom = 1500),
+                node(5, "Search", viewId = "app_search_bar", top = 2140, bottom = 2280)
+            ),
+            screenshot = null,
+            captureNote = ""
+        )
+        val step2 = com.example.agent.LauncherSearchHelper.planNextLauncherSearchStep(
+            goal = "Facebook Lite এ গিয়ে নিউজফিড স্ক্রল করো",
+            snapshot = drawerSnapshot,
+            alreadyOpenedDrawer = true,
+            alreadyTappedSearch = false,
+            alreadyTypedSearch = false
+        )
+        org.junit.Assert.assertNotNull(step2)
+        assertEquals(AgentActionType.TAP, step2!!.action.actionType)
+        assertEquals(5, step2.action.targetNodeId)
+        assertEquals("TAP_SEARCH_BAR", step2.stageTag)
+
+        // Step 3: Search input box open -> types exact app name "Lite"
+        val finderInputSnapshot = com.example.agent.UiSnapshot(
+            packageName = "com.samsung.android.app.galaxyfinder",
+            screenWidth = 1080,
+            screenHeight = 2400,
+            nodes = listOf(
+                node(10, "Search", viewId = "search_src_text", clickable = true, editable = true, top = 120, bottom = 220)
+            ),
+            screenshot = null,
+            captureNote = ""
+        )
+        val step3 = com.example.agent.LauncherSearchHelper.planNextLauncherSearchStep(
+            goal = "Facebook Lite এ গিয়ে নিউজফিড স্ক্রল করো",
+            snapshot = finderInputSnapshot,
+            alreadyOpenedDrawer = true,
+            alreadyTappedSearch = true,
+            alreadyTypedSearch = false
+        )
+        org.junit.Assert.assertNotNull(step3)
+        assertEquals(AgentActionType.INPUT_TEXT, step3!!.action.actionType)
+        assertEquals("Lite", step3.action.textToType)
+        assertEquals("TYPE_APP_NAME", step3.stageTag)
+
+        // Step 4: Search results visible -> taps exact matching app "Lite"
+        val finderResultsSnapshot = com.example.agent.UiSnapshot(
+            packageName = "com.samsung.android.app.galaxyfinder",
+            screenWidth = 1080,
+            screenHeight = 2400,
+            nodes = listOf(
+                node(10, "Lite", viewId = "search_src_text", clickable = true, editable = true, top = 120, bottom = 220),
+                node(11, "Lite", viewId = "app_icon_title", clickable = true, editable = false, top = 360, bottom = 520)
+            ),
+            screenshot = null,
+            captureNote = ""
+        )
+        val step4 = com.example.agent.LauncherSearchHelper.planNextLauncherSearchStep(
+            goal = "Facebook Lite এ গিয়ে নিউজফিড স্ক্রল করো",
+            snapshot = finderResultsSnapshot,
+            alreadyOpenedDrawer = true,
+            alreadyTappedSearch = true,
+            alreadyTypedSearch = true
+        )
+        org.junit.Assert.assertNotNull(step4)
+        assertEquals(AgentActionType.TAP, step4!!.action.actionType)
+        assertEquals(11, step4.action.targetNodeId)
+        assertEquals("TAP_APP_RESULT", step4.stageTag)
+
+        // Wrong app detection: landed in WhatsApp instead of Lite -> true; landed in com.facebook.lite -> false
+        assertTrue(
+            com.example.agent.LauncherSearchHelper.didLandInWrongApp(
+                goal = "Facebook Lite এ গিয়ে নিউজফিড স্ক্রল করো",
+                currentPackage = "com.whatsapp",
+                selfPackage = "com.example"
+            )
+        )
+        assertFalse(
+            com.example.agent.LauncherSearchHelper.didLandInWrongApp(
+                goal = "Facebook Lite এ গিয়ে নিউজফিড স্ক্রল করো",
+                currentPackage = "com.facebook.lite",
+                selfPackage = "com.example"
+            )
+        )
+    }
+
+    @Test
+    fun `action enum supports SWIPE_LEFT and SWIPE_RIGHT and reverse navigation detection`() {
+        assertEquals(AgentActionType.SWIPE_LEFT, AgentActionType.fromWire("SWIPE_LEFT"))
+        assertEquals(AgentActionType.SWIPE_RIGHT, AgentActionType.fromWire("swipe_right"))
+        assertTrue(
+            com.example.agent.ActionCacheStore.isReverseNavigationAction(
+                AgentActionType.SWIPE_LEFT,
+                AgentActionType.SWIPE_RIGHT
+            )
+        )
+        assertTrue(
+            com.example.agent.ActionCacheStore.isReverseNavigationAction(
+                AgentActionType.SCROLL_DOWN,
+                AgentActionType.SCROLL_UP
+            )
+        )
+        assertFalse(
+            com.example.agent.ActionCacheStore.isReverseNavigationAction(
+                AgentActionType.SWIPE_LEFT,
+                AgentActionType.SCROLL_DOWN
+            )
+        )
+    }
 }
+
 

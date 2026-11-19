@@ -247,7 +247,7 @@ object RestAiClients {
         val contractBody = when (schemaKind) {
             RestSchemaKind.ACTION -> """
                 {
-                  "actionType": "TAP" | "DRAG" | "LONG_PRESS" | "INPUT_TEXT" | "SCROLL_DOWN" | "SCROLL_UP" | "BACK" | "HOME" | "WAIT" | "COMPLETE" | "FAIL",
+                  "actionType": "TAP" | "DRAG" | "LONG_PRESS" | "INPUT_TEXT" | "SCROLL_DOWN" | "SCROLL_UP" | "SWIPE_LEFT" | "SWIPE_RIGHT" | "BACK" | "HOME" | "WAIT" | "COMPLETE" | "FAIL",
                   "targetNodeId": integer or null,
                   "x": integer or null,
                   "y": integer or null,
@@ -378,6 +378,8 @@ object RestAiClients {
                 "INPUT_TEXT",
                 "SCROLL_DOWN",
                 "SCROLL_UP",
+                "SWIPE_LEFT",
+                "SWIPE_RIGHT",
                 "BACK",
                 "HOME",
                 "WAIT",

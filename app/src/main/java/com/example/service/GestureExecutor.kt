@@ -165,7 +165,8 @@ object GestureExecutor {
                 val cx = (screenWidth * 0.5f)
                 val startY = (screenHeight * 0.72f)
                 val endY = (screenHeight * 0.28f)
-                val ok = dispatchSwipe(service, cx, startY, cx, endY)
+                val duration = (action.durationMs ?: 360L).coerceIn(180L, 1200L)
+                val ok = dispatchSwipe(service, cx, startY, cx, endY, durationMs = duration)
                 ExecutionResult(ok, if (ok) "Scrolled down" else "Scroll down failed")
             }
 
@@ -173,8 +174,27 @@ object GestureExecutor {
                 val cx = (screenWidth * 0.5f)
                 val startY = (screenHeight * 0.28f)
                 val endY = (screenHeight * 0.72f)
-                val ok = dispatchSwipe(service, cx, startY, cx, endY)
+                val duration = (action.durationMs ?: 360L).coerceIn(180L, 1200L)
+                val ok = dispatchSwipe(service, cx, startY, cx, endY, durationMs = duration)
                 ExecutionResult(ok, if (ok) "Scrolled up" else "Scroll up failed")
+            }
+
+            AgentActionType.SWIPE_LEFT -> {
+                val cy = (action.y?.toFloat() ?: (screenHeight * 0.50f)).coerceIn(screenHeight * 0.15f, screenHeight * 0.85f)
+                val startX = (screenWidth * 0.84f)
+                val endX = (screenWidth * 0.16f)
+                val duration = (action.durationMs ?: 300L).coerceIn(150L, 1000L)
+                val ok = dispatchSwipe(service, startX, cy, endX, cy, durationMs = duration)
+                ExecutionResult(ok, if (ok) "Slid left" else "Left slide failed")
+            }
+
+            AgentActionType.SWIPE_RIGHT -> {
+                val cy = (action.y?.toFloat() ?: (screenHeight * 0.50f)).coerceIn(screenHeight * 0.15f, screenHeight * 0.85f)
+                val startX = (screenWidth * 0.16f)
+                val endX = (screenWidth * 0.84f)
+                val duration = (action.durationMs ?: 300L).coerceIn(150L, 1000L)
+                val ok = dispatchSwipe(service, startX, cy, endX, cy, durationMs = duration)
+                ExecutionResult(ok, if (ok) "Slid right" else "Right slide failed")
             }
 
             AgentActionType.BACK -> {

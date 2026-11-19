@@ -820,4 +820,300 @@ class ExampleRobolectricTest {
         org.junit.Assert.assertTrue(turnMemory.canAffordAnotherSliderMove(4_000L, isLiveStreamActive = true))
         org.junit.Assert.assertFalse(turnMemory.canAffordAnotherSliderMove(7_200L, isLiveStreamActive = true))
     }
+
+    @Test
+    fun `verified cache trail caches correct steps including swipes and purges wrong pages and wrong apps`() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val cacheStore = com.example.agent.ActionCacheStore(context)
+        cacheStore.clearAll()
+
+        fun node(
+            id: Int,
+            label: String,
+            viewId: String,
+            editable: Boolean = false
+        ) = com.example.agent.ScreenNode(
+            id = id,
+            className = if (editable) "android.widget.EditText" else "android.widget.Button",
+            text = label,
+            contentDesc = "",
+            viewId = viewId,
+            bounds = com.example.agent.ScreenBounds(100, 200 + id * 120, 400, 300 + id * 120),
+            isClickable = true,
+            isEditable = editable,
+            isScrollable = true,
+            isChecked = false,
+            isFocused = editable
+        )
+
+        val goal = "YouTube এ্যাপে গিয়ে Shorts স্লাইড করো"
+        val drawerNodes = listOf(node(1, "Search", "btn_search"), node(2, "YouTube", "btn_yt"))
+        val drawerSig = com.example.agent.ActionCacheStore.computeScreenSignature(drawerNodes)
+        val drawerComposite = "com.sec.android.app.launcher::$drawerSig"
+
+        val finderNodes = listOf(node(3, "Search", "edit_query", editable = true), node(4, "Voice", "btn_voice"))
+        val finderSig = com.example.agent.ActionCacheStore.computeScreenSignature(finderNodes)
+        val finderComposite = "com.samsung.android.app.galaxyfinder::$finderSig"
+
+        val ytHomeNodes = listOf(node(5, "Shorts", "tab_shorts"), node(6, "Subscriptions", "tab_subs"))
+        val ytHomeSig = com.example.agent.ActionCacheStore.computeScreenSignature(ytHomeNodes)
+        val ytHomeComposite = "com.google.android.youtube::$ytHomeSig"
+
+        val ytWrongSubsNodes = listOf(node(7, "All Subscriptions", "subs_header"), node(8, "Channel A", "ch_a"))
+        val ytWrongSubsSig = com.example.agent.ActionCacheStore.computeScreenSignature(ytWrongSubsNodes)
+        val ytWrongSubsComposite = "com.google.android.youtube::$ytWrongSubsSig"
+
+        val ytShortsNodes = listOf(node(9, "Like", "like_btn"), node(10, "Comment", "comment_btn"))
+        val ytShortsSig = com.example.agent.ActionCacheStore.computeScreenSignature(ytShortsNodes)
+        val ytShortsComposite = "com.google.android.youtube::$ytShortsSig"
+
+        val ytShortsNextNodes = listOf(node(11, "Share", "share_btn"), node(12, "Remix", "remix_btn"))
+        val ytShortsNextSig = com.example.agent.ActionCacheStore.computeScreenSignature(ytShortsNextNodes)
+        val ytShortsNextComposite = "com.google.android.youtube::$ytShortsNextSig"
+
+        val trail = com.example.agent.VerifiedCacheTrail(cacheStore)
+
+        // 1. Valid step: Drawer -> Finder (tap Search)
+        val candTapSearch = com.example.agent.PendingCacheCandidate(
+            goal = goal,
+            packageName = "com.sec.android.app.launcher",
+            screenSignature = drawerSig,
+            interactiveNodeCount = 2,
+            action = com.example.agent.PlannedAction(
+                actionType = AgentActionType.TAP,
+                targetNodeId = 1,
+                x = 250,
+                y = 370,
+                textToType = null,
+                waitSeconds = null,
+                memoryNote = null,
+                reason = "Tap Search",
+                requiresConfirmation = false
+            ),
+            targetNode = drawerNodes[0],
+            hadConfirmedSafety = false
+        )
+        trail.onStepObserved(
+            prevCandidate = candTapSearch,
+            prevReplayedKey = null,
+            preCompositeScreen = drawerComposite,
+            currentCompositeScreen = finderComposite,
+            currentPackage = "com.samsung.android.app.galaxyfinder",
+            currentSignature = finderSig,
+            prevActionType = AgentActionType.TAP
+        )
+
+        // 2. Wrong app detour: Finder -> WhatsApp instead of YouTube -> immediately purged on wasWrongPageOrApp!
+        val candWrongApp = com.example.agent.PendingCacheCandidate(
+            goal = goal,
+            packageName = "com.samsung.android.app.galaxyfinder",
+            screenSignature = finderSig,
+            interactiveNodeCount = 2,
+            action = com.example.agent.PlannedAction(
+                actionType = AgentActionType.TAP,
+                targetNodeId = 4,
+                x = 250,
+                y = 730,
+                textToType = null,
+                waitSeconds = null,
+                memoryNote = null,
+                reason = "Tapped wrong app",
+                requiresConfirmation = false
+            ),
+            targetNode = finderNodes[1],
+            hadConfirmedSafety = false
+        )
+        trail.onStepObserved(
+            prevCandidate = candWrongApp,
+            prevReplayedKey = null,
+            preCompositeScreen = finderComposite,
+            currentCompositeScreen = "com.whatsapp::wrong_app",
+            currentPackage = "com.whatsapp",
+            currentSignature = "wrong_app",
+            prevActionType = AgentActionType.TAP,
+            wasWrongPageOrApp = true
+        )
+        // Pressed BACK to return to Finder -> valid candTapSearch stays staged!
+        trail.onStepObserved(
+            prevCandidate = null,
+            prevReplayedKey = null,
+            preCompositeScreen = "com.whatsapp::wrong_app",
+            currentCompositeScreen = finderComposite,
+            currentPackage = "com.samsung.android.app.galaxyfinder",
+            currentSignature = finderSig,
+            prevActionType = AgentActionType.BACK
+        )
+
+        // 3. Valid step: Finder -> YouTube Home (type YouTube)
+        val candTypeYt = com.example.agent.PendingCacheCandidate(
+            goal = goal,
+            packageName = "com.samsung.android.app.galaxyfinder",
+            screenSignature = finderSig,
+            interactiveNodeCount = 2,
+            action = com.example.agent.PlannedAction(
+                actionType = AgentActionType.INPUT_TEXT,
+                targetNodeId = 3,
+                x = 250,
+                y = 610,
+                textToType = "YouTube",
+                waitSeconds = null,
+                memoryNote = null,
+                reason = "Search YouTube",
+                requiresConfirmation = false
+            ),
+            targetNode = finderNodes[0],
+            hadConfirmedSafety = false
+        )
+        trail.onStepObserved(
+            prevCandidate = candTypeYt,
+            prevReplayedKey = null,
+            preCompositeScreen = finderComposite,
+            currentCompositeScreen = ytHomeComposite,
+            currentPackage = "com.google.android.youtube",
+            currentSignature = ytHomeSig,
+            prevActionType = AgentActionType.INPUT_TEXT
+        )
+
+        // 4. Inside YouTube Home: accidentally tapped Subscriptions (WRONG PAGE) -> then pressed BACK
+        val candWrongTab = com.example.agent.PendingCacheCandidate(
+            goal = goal,
+            packageName = "com.google.android.youtube",
+            screenSignature = ytHomeSig,
+            interactiveNodeCount = 2,
+            action = com.example.agent.PlannedAction(
+                actionType = AgentActionType.TAP,
+                targetNodeId = 6,
+                x = 250,
+                y = 970,
+                textToType = null,
+                waitSeconds = null,
+                memoryNote = null,
+                reason = "Tap Subscriptions by mistake",
+                requiresConfirmation = false
+            ),
+            targetNode = ytHomeNodes[1],
+            hadConfirmedSafety = false
+        )
+        trail.onStepObserved(
+            prevCandidate = candWrongTab,
+            prevReplayedKey = null,
+            preCompositeScreen = ytHomeComposite,
+            currentCompositeScreen = ytWrongSubsComposite,
+            currentPackage = "com.google.android.youtube",
+            currentSignature = ytWrongSubsSig,
+            prevActionType = AgentActionType.TAP
+        )
+        // Realized wrong page -> pressed BACK to YouTube Home
+        trail.onStepObserved(
+            prevCandidate = null,
+            prevReplayedKey = null,
+            preCompositeScreen = ytWrongSubsComposite,
+            currentCompositeScreen = ytHomeComposite,
+            currentPackage = "com.google.android.youtube",
+            currentSignature = ytHomeSig,
+            prevActionType = AgentActionType.BACK
+        )
+
+        // 5. Correct tap on Shorts -> arrived on Shorts
+        val candTapShorts = com.example.agent.PendingCacheCandidate(
+            goal = goal,
+            packageName = "com.google.android.youtube",
+            screenSignature = ytHomeSig,
+            interactiveNodeCount = 2,
+            action = com.example.agent.PlannedAction(
+                actionType = AgentActionType.TAP,
+                targetNodeId = 5,
+                x = 250,
+                y = 850,
+                textToType = null,
+                waitSeconds = null,
+                memoryNote = null,
+                reason = "Tap Shorts tab",
+                requiresConfirmation = false
+            ),
+            targetNode = ytHomeNodes[0],
+            hadConfirmedSafety = false
+        )
+        trail.onStepObserved(
+            prevCandidate = candTapShorts,
+            prevReplayedKey = null,
+            preCompositeScreen = ytHomeComposite,
+            currentCompositeScreen = ytShortsComposite,
+            currentPackage = "com.google.android.youtube",
+            currentSignature = ytShortsSig,
+            prevActionType = AgentActionType.TAP
+        )
+
+        // 6. Correct SWIPE_LEFT on Shorts -> advanced to ShortsNext, then COMPLETE
+        val candSwipeLeft = com.example.agent.PendingCacheCandidate(
+            goal = goal,
+            packageName = "com.google.android.youtube",
+            screenSignature = ytShortsSig,
+            interactiveNodeCount = 2,
+            action = com.example.agent.PlannedAction(
+                actionType = AgentActionType.SWIPE_LEFT,
+                targetNodeId = null,
+                x = null,
+                y = null,
+                textToType = null,
+                waitSeconds = null,
+                memoryNote = null,
+                reason = "Slide left on Shorts",
+                requiresConfirmation = false
+            ),
+            targetNode = null,
+            hadConfirmedSafety = false
+        )
+        trail.onStepObserved(
+            prevCandidate = candSwipeLeft,
+            prevReplayedKey = null,
+            preCompositeScreen = ytShortsComposite,
+            currentCompositeScreen = ytShortsNextComposite,
+            currentPackage = "com.google.android.youtube",
+            currentSignature = ytShortsNextSig,
+            prevActionType = AgentActionType.SWIPE_LEFT
+        )
+
+        trail.commitAllOnComplete()
+
+        val saved = cacheStore.cachedActions.value
+        val savedLabels = saved.map { it.targetLabel }
+
+        // Wrong app tap ("Voice") and wrong tab tap ("Subscriptions") must NOT be in cache!
+        assertFalse("Wrong app tap should not be cached", "Voice" in savedLabels)
+        assertFalse("Wrong page tap should not be cached", "Subscriptions" in savedLabels)
+
+        // Verified correct steps ("Search", "Search" INPUT_TEXT, "Shorts", "Slide Left") MUST be cached & replayable!
+        org.junit.Assert.assertTrue("Expected Shorts tab in cache, got $savedLabels", "Shorts" in savedLabels)
+        org.junit.Assert.assertTrue("Expected Slide Left in cache, got $savedLabels", "Slide Left" in savedLabels)
+
+        val replayOnYtHome = cacheStore.findReplayMatch(
+            goal = goal,
+            snapshot = com.example.agent.UiSnapshot("com.google.android.youtube", 1080, 2400, ytHomeNodes, null, "")
+        )
+        assertEquals(AgentActionType.TAP, replayOnYtHome?.action?.actionType)
+        assertEquals(5, replayOnYtHome?.action?.targetNodeId)
+
+        val replayOnShorts = cacheStore.findReplayMatch(
+            goal = goal,
+            snapshot = com.example.agent.UiSnapshot("com.google.android.youtube", 1080, 2400, ytShortsNodes, null, "")
+        )
+        assertEquals(AgentActionType.SWIPE_LEFT, replayOnShorts?.action?.actionType)
+
+        cacheStore.clearAll()
+    }
+
+    @Test
+    fun `gemini planner parses SWIPE_LEFT and SWIPE_RIGHT json cleanly`() {
+        val planner = GeminiAiPlanner()
+        val leftJson = """{"actionType":"SWIPE_LEFT","targetNodeId":null,"x":null,"y":1100,"reason":"Slide left to next tab","requiresConfirmation":false}"""
+        val rightJson = """{"actionType":"SWIPE_RIGHT","targetNodeId":null,"x":null,"y":1100,"reason":"Slide right to previous card","requiresConfirmation":false}"""
+
+        val parsedLeft = planner.parsePlannedAction(leftJson)
+        val parsedRight = planner.parsePlannedAction(rightJson)
+        assertEquals(AgentActionType.SWIPE_LEFT, parsedLeft.actionType)
+        assertEquals(1100, parsedLeft.y)
+        assertEquals(AgentActionType.SWIPE_RIGHT, parsedRight.actionType)
+    }
 }
+

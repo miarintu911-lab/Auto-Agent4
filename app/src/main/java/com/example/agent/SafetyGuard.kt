@@ -38,7 +38,9 @@ object SafetyGuard {
                 AgentActionType.BACK,
                 AgentActionType.HOME,
                 AgentActionType.SCROLL_DOWN,
-                AgentActionType.SCROLL_UP
+                AgentActionType.SCROLL_UP,
+                AgentActionType.SWIPE_LEFT,
+                AgentActionType.SWIPE_RIGHT
             )
         ) {
             return Evaluation(needsConfirmation = false, reason = "")

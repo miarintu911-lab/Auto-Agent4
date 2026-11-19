@@ -42,7 +42,11 @@ class GeminiAiPlanner {
            - CARROM TURN RULE (CRITICAL): Whenever a striker of ANY color or custom skin (white, black, cyan, gold, red, brown/monster/dragon, patterned, or glowing ring) is sitting on the BOTTOM baseline (y ~ 58%-74%) OR a bottom slider knob below the board is visible, IT IS YOUR TURN — ALWAYS execute a DRAG shot (or slider move) immediately! NEVER return WAIT when any striker is on the bottom side. On opening break racks, pull back ~280..360px opposite the center cluster to smash cleanly; in Points/Freestyle mode (Red=50, White=20, Black=10), target Red/White first. Only WAIT if the striker is at the TOP baseline (opponent's turn).
         3. LONG_PRESS: Use (x, y) with durationMs (e.g. 700..1500ms) for hold-to-charge shots or context menus.
         4. INPUT_TEXT: Only on editable fields, with textToType.
-        5. SCROLL_DOWN / SCROLL_UP / HOME / BACK: Use for off-screen content or launching the target app/game.
+        5. SCROLL_DOWN / SCROLL_UP / SWIPE_LEFT / SWIPE_RIGHT / HOME / BACK:
+           - Use SCROLL_DOWN / SCROLL_UP to scroll vertically.
+           - Use SWIPE_LEFT / SWIPE_RIGHT to slide horizontally left or right across tabs, pages, carousels, or stories.
+           - APP DRAWER SEARCH RULE (MANDATORY): Whenever the user asks to do any work inside an app and you are NOT already in that app, FIRST open the App Drawer / Apps screen (e.g. Samsung One UI App Drawer with the bottom 'Search' bar — swipe up via DRAG if you are on the Home screen), TAP the 'Search' bar, type the EXACT app name via INPUT_TEXT, and TAP the matching search result to enter the app before performing the task inside it!
+           - WRONG-PAGE / WRONG-SLIDE RECOVERY: If a tap, scroll, or left/right slide accidentally opens the wrong page or wrong app, IMMEDIATELY press BACK (and note the mistake in foulOrMistakeLesson) so TapPilot purges that wrong action from cache and corrects course.
 
         Self-Training & Mistake Learning Rules:
         6. Carefully compare the PREVIOUS ACTION and its coordinates against the CURRENT SCREENSHOT:
@@ -56,7 +60,7 @@ class GeminiAiPlanner {
         10. In CONTINUOUS_MONITOR mode, return WAIT with waitSeconds (e.g. 15..90) when idling between notifications or checks.
         11. ANTI-DOUBLE-TEXT / NO-SPAM CHAT RULE (CRITICAL): In Messenger, Facebook, WhatsApp, Instagram, or Telegram, NEVER send another message (`INPUT_TEXT` or `Send`) if your previous message is still the latest bubble or the recipient has NOT replied yet! Do NOT send repeated follow-ups like "কি খবর বন্ধু" or "hello?". Instead, return `WAIT` (`waitSeconds = 25..45`) until an incoming reply or new notification arrives.
         12. RELATIONSHIP PERSONA RULE: If a `MATCHED CONTACT PROFILE` is present (e.g., Friend/বন্ধু, GF/জিএফ, Brother/ভাই, Sister/বোন, Family/পরিবার, Business), strictly adopt that exact tone, Bengali/Banglish warmth, honorifics, and custom style note. Use `SAVED CONTACTS ROSTER` to identify saved contacts by Name + Platform (WhatsApp / Facebook) even when browsing an inbox list.
-        13. STRONGER ACTION RECOVERY: Never repeat the exact same failing TAP/DRAG. If `PREVIOUS ACTION RESULT` warns `[NO SCREEN CHANGE]`, immediately change strategy: pick the parent container/text node, use visual coordinates from the screenshot, scroll slightly, or press `BACK`.
+        13. STRONGER ACTION RECOVERY: Never repeat the exact same failing TAP/DRAG. If `PREVIOUS ACTION RESULT` warns `[NO SCREEN CHANGE]`, immediately change strategy: pick the parent container/text node, use visual coordinates from the screenshot, scroll slightly, slide left/right, or press `BACK`.
     """.trimIndent()
 
     private val researchSystemPrompt = """
@@ -79,6 +83,8 @@ class GeminiAiPlanner {
                     "INPUT_TEXT",
                     "SCROLL_DOWN",
                     "SCROLL_UP",
+                    "SWIPE_LEFT",
+                    "SWIPE_RIGHT",
                     "BACK",
                     "HOME",
                     "WAIT",

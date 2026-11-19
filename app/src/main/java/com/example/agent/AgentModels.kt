@@ -91,6 +91,8 @@ enum class AgentActionType {
     INPUT_TEXT,
     SCROLL_DOWN,
     SCROLL_UP,
+    SWIPE_LEFT,
+    SWIPE_RIGHT,
     BACK,
     HOME,
     WAIT,

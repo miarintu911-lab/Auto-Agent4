@@ -13,7 +13,7 @@ import java.security.MessageDigest
 private const val PREFS_ACTION_CACHE = "tappilot_action_cache"
 private const val KEY_CACHE_JSON = "cached_actions_json"
 private const val MAX_CACHED_ACTIONS = 80
-private const val MIN_INTERACTIVE_NODES_FOR_CACHE = 4
+private const val MIN_INTERACTIVE_NODES_FOR_CACHE = 2
 
 data class PendingCacheCandidate(
     val goal: String,
@@ -23,6 +23,19 @@ data class PendingCacheCandidate(
     val action: PlannedAction,
     val targetNode: ScreenNode?,
     val hadConfirmedSafety: Boolean
+)
+
+data class AfterScreenSummary(
+    val packageName: String,
+    val screenSignature: String
+)
+
+data class StagedCacheStep(
+    val candidate: PendingCacheCandidate,
+    val preCompositeScreen: String,
+    val postCompositeScreen: String,
+    val afterSummary: AfterScreenSummary,
+    val replayedCacheKey: String? = null
 )
 
 data class CacheReplayMatch(
@@ -57,7 +70,21 @@ class ActionCacheStore(context: Context) {
         candidate: PendingCacheCandidate,
         afterSnapshot: UiSnapshot
     ): CachedActionEntry? {
-        if (!isEligibleForCache(candidate, afterSnapshot)) return null
+        val afterSig = computeScreenSignature(afterSnapshot.nodes)
+        return recordVerifiedSuccessSummary(
+            candidate = candidate,
+            afterSummary = AfterScreenSummary(
+                packageName = afterSnapshot.packageName,
+                screenSignature = afterSig
+            )
+        )
+    }
+
+    suspend fun recordVerifiedSuccessSummary(
+        candidate: PendingCacheCandidate,
+        afterSummary: AfterScreenSummary
+    ): CachedActionEntry? {
+        if (!isEligibleForCacheSummary(candidate, afterSummary)) return null
 
         val action = candidate.action
         val node = candidate.targetNode
@@ -65,6 +92,8 @@ class ActionCacheStore(context: Context) {
             when (action.actionType) {
                 AgentActionType.SCROLL_DOWN -> "Scroll Down"
                 AgentActionType.SCROLL_UP -> "Scroll Up"
+                AgentActionType.SWIPE_LEFT -> "Slide Left"
+                AgentActionType.SWIPE_RIGHT -> "Slide Right"
                 else -> ""
             }
         }
@@ -112,6 +141,22 @@ class ActionCacheStore(context: Context) {
         return saved
     }
 
+    suspend fun removeMatchingCandidate(candidate: PendingCacheCandidate) {
+        val goalKeywords = normalizeGoalKeywords(candidate.goal)
+        val exactKey = buildCacheKey(goalKeywords, candidate.packageName, candidate.screenSignature)
+        val updated = _cachedActions.value.filterNot { entry ->
+            entry.cacheKey == exactKey ||
+                (entry.packageName == candidate.packageName &&
+                    entry.screenSignature == candidate.screenSignature &&
+                    entry.actionType == candidate.action.actionType &&
+                    goalsOverlap(goalKeywords, entry.goalKeywords))
+        }
+        if (updated.size != _cachedActions.value.size) {
+            _cachedActions.value = updated
+            persist(updated)
+        }
+    }
+
     suspend fun incrementHit(cacheKey: String) {
         val current = _cachedActions.value.toMutableList()
         val idx = current.indexOfFirst { it.cacheKey == cacheKey }
@@ -128,8 +173,10 @@ class ActionCacheStore(context: Context) {
 
     suspend fun removeEntry(cacheKey: String) {
         val updated = _cachedActions.value.filterNot { it.cacheKey == cacheKey }
-        _cachedActions.value = updated
-        persist(updated)
+        if (updated.size != _cachedActions.value.size) {
+            _cachedActions.value = updated
+            persist(updated)
+        }
     }
 
     suspend fun clearAll() {
@@ -150,17 +197,33 @@ class ActionCacheStore(context: Context) {
             AgentActionType.TAP,
             AgentActionType.INPUT_TEXT,
             AgentActionType.SCROLL_DOWN,
-            AgentActionType.SCROLL_UP
+            AgentActionType.SCROLL_UP,
+            AgentActionType.SWIPE_LEFT,
+            AgentActionType.SWIPE_RIGHT
         )
 
         private val stopWords = setOf(
             "the", "and", "for", "with", "into", "from", "then", "open", "app", "please",
-            "game", "tap", "click", "on", "to", "a", "an", "in", "of"
+            "game", "tap", "click", "on", "to", "a", "an", "in", "of",
+            "এ্যাপ", "অ্যাপ", "অ্যাপে", "এ্যাপে", "গিয়ে", "করে", "দিয়ে", "করো", "দাও", "যাও", "ভিতরে", "প্রথমে", "তারপরে"
         )
 
         fun isEligibleForCache(
             candidate: PendingCacheCandidate,
             afterSnapshot: UiSnapshot
+        ): Boolean {
+            return isEligibleForCacheSummary(
+                candidate = candidate,
+                afterSummary = AfterScreenSummary(
+                    packageName = afterSnapshot.packageName,
+                    screenSignature = computeScreenSignature(afterSnapshot.nodes)
+                )
+            )
+        }
+
+        fun isEligibleForCacheSummary(
+            candidate: PendingCacheCandidate,
+            afterSummary: AfterScreenSummary
         ): Boolean {
             if (candidate.hadConfirmedSafety || candidate.action.requiresConfirmation) return false
             if (candidate.action.actionType !in cacheableActions) return false
@@ -169,9 +232,8 @@ class ActionCacheStore(context: Context) {
             if (candidate.packageName.isBlank() || candidate.packageName == "unknown") return false
 
             // Confirm the action actually changed package or UI screen state
-            val afterSig = computeScreenSignature(afterSnapshot.nodes)
-            val changedScreen = afterSnapshot.packageName != candidate.packageName ||
-                afterSig != candidate.screenSignature
+            val changedScreen = afterSummary.packageName != candidate.packageName ||
+                afterSummary.screenSignature != candidate.screenSignature
             if (!changedScreen) return false
 
             if (candidate.action.actionType in setOf(AgentActionType.TAP, AgentActionType.INPUT_TEXT)) {
@@ -179,6 +241,16 @@ class ActionCacheStore(context: Context) {
                 if (node.displayLabel().isBlank() && node.viewId.isBlank()) return false
             }
             return true
+        }
+
+        fun isReverseNavigationAction(
+            prev: AgentActionType,
+            curr: AgentActionType
+        ): Boolean {
+            return (prev == AgentActionType.SWIPE_LEFT && curr == AgentActionType.SWIPE_RIGHT) ||
+                (prev == AgentActionType.SWIPE_RIGHT && curr == AgentActionType.SWIPE_LEFT) ||
+                (prev == AgentActionType.SCROLL_DOWN && curr == AgentActionType.SCROLL_UP) ||
+                (prev == AgentActionType.SCROLL_UP && curr == AgentActionType.SCROLL_DOWN)
         }
 
         fun matchEntryFromList(
@@ -211,7 +283,10 @@ class ActionCacheStore(context: Context) {
             snapshot: UiSnapshot
         ): CacheReplayMatch? {
             return when (entry.actionType) {
-                AgentActionType.SCROLL_DOWN, AgentActionType.SCROLL_UP -> {
+                AgentActionType.SCROLL_DOWN,
+                AgentActionType.SCROLL_UP,
+                AgentActionType.SWIPE_LEFT,
+                AgentActionType.SWIPE_RIGHT -> {
                     CacheReplayMatch(
                         entry = entry,
                         action = PlannedAction(
@@ -298,16 +373,16 @@ class ActionCacheStore(context: Context) {
 
         fun normalizeGoalKeywords(goal: String): String {
             val words = goal.lowercase()
-                .replace(Regex("[^a-z0-9\\s]"), " ")
+                .replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
                 .split(Regex("\\s+"))
                 .filter { it.length >= 2 && it !in stopWords }
                 .distinct()
-                .take(5)
+                .take(6)
                 .sorted()
             return if (words.isEmpty()) goal.trim().lowercase().take(40) else words.joinToString("_")
         }
 
-        private fun goalsOverlap(a: String, b: String): Boolean {
+        internal fun goalsOverlap(a: String, b: String): Boolean {
             if (a == b) return true
             val setA = a.split('_').filter { it.isNotBlank() }.toSet()
             val setB = b.split('_').filter { it.isNotBlank() }.toSet()
@@ -379,6 +454,184 @@ class ActionCacheStore(context: Context) {
                 }
                 out
             }.getOrDefault(emptyList())
+        }
+    }
+}
+
+/**
+ * Stages navigation actions during a run and ONLY commits steps to persistent ActionCacheStore
+ * once subsequent progress confirms they did NOT land on a wrong page, fail, or get undone by BACK/reverse-swipe.
+ */
+class VerifiedCacheTrail(
+    private val store: ActionCacheStore?
+) {
+    private val staged = mutableListOf<StagedCacheStep>()
+    private val committedThisRun = mutableListOf<StagedCacheStep>()
+
+    val stagedCount: Int get() = staged.size
+
+    suspend fun onStepObserved(
+        prevCandidate: PendingCacheCandidate?,
+        prevReplayedKey: String?,
+        preCompositeScreen: String?,
+        currentCompositeScreen: String,
+        currentPackage: String,
+        currentSignature: String,
+        prevActionType: AgentActionType?,
+        wasWrongPageOrApp: Boolean = false
+    ) {
+        if (wasWrongPageOrApp) {
+            // The step that just entered this wrong app/page must be discarded & evicted immediately,
+            // while keeping valid earlier steps (e.g., App Drawer Search) intact when BACK returns there.
+            prevReplayedKey?.let { store?.removeEntry(it) }
+            if (prevCandidate != null) {
+                store?.removeMatchingCandidate(prevCandidate)
+            }
+            if (staged.isNotEmpty() && staged.last().postCompositeScreen == currentCompositeScreen) {
+                val bad = staged.removeAt(staged.lastIndex)
+                bad.replayedCacheKey?.let { store?.removeEntry(it) }
+                store?.removeMatchingCandidate(bad.candidate)
+            }
+            return
+        }
+
+        if (prevActionType == AgentActionType.BACK) {
+            purgeWrongDetour(
+                returnedToComposite = currentCompositeScreen,
+                wrongPageComposite = preCompositeScreen
+            )
+            return
+        }
+
+        if (prevActionType == AgentActionType.FAIL) {
+            discardLastStagedAndEvict()
+            return
+        }
+
+        // Check if user/AI performed an immediate reverse-scroll or reverse-slide returning to previous screen
+        val last = staged.lastOrNull()
+        if (last != null &&
+            prevActionType != null &&
+            ActionCacheStore.isReverseNavigationAction(last.candidate.action.actionType, prevActionType) &&
+            currentCompositeScreen == last.preCompositeScreen
+        ) {
+            discardLastStagedAndEvict()
+            return
+        }
+
+        if (prevReplayedKey != null && preCompositeScreen != null && prevCandidate != null) {
+            if (preCompositeScreen == currentCompositeScreen) {
+                store?.removeEntry(prevReplayedKey)
+            } else {
+                val afterSummary = AfterScreenSummary(
+                    packageName = currentPackage,
+                    screenSignature = currentSignature
+                )
+                staged.add(
+                    StagedCacheStep(
+                        candidate = prevCandidate,
+                        preCompositeScreen = preCompositeScreen,
+                        postCompositeScreen = currentCompositeScreen,
+                        afterSummary = afterSummary,
+                        replayedCacheKey = prevReplayedKey
+                    )
+                )
+                promoteVerifiedSteps()
+            }
+            return
+        }
+
+        if (prevCandidate != null && preCompositeScreen != null) {
+            val afterSummary = AfterScreenSummary(
+                packageName = currentPackage,
+                screenSignature = currentSignature
+            )
+            if (preCompositeScreen == currentCompositeScreen) {
+                // Action had zero effect -> never cache, and remove if previously cached
+                store?.removeMatchingCandidate(prevCandidate)
+            } else if (ActionCacheStore.isEligibleForCacheSummary(prevCandidate, afterSummary)) {
+                staged.add(
+                    StagedCacheStep(
+                        candidate = prevCandidate,
+                        preCompositeScreen = preCompositeScreen,
+                        postCompositeScreen = currentCompositeScreen,
+                        afterSummary = afterSummary
+                    )
+                )
+                promoteVerifiedSteps()
+            }
+        }
+    }
+
+    private suspend fun promoteVerifiedSteps() {
+        // Commit steps that have survived >= 2 clean forward steps without BACK/mistake
+        while (staged.size > 2) {
+            val verified = staged.removeAt(0)
+            committedThisRun.add(verified)
+            if (verified.replayedCacheKey != null) {
+                store?.incrementHit(verified.replayedCacheKey)
+            } else {
+                store?.recordVerifiedSuccessSummary(verified.candidate, verified.afterSummary)
+            }
+        }
+    }
+
+    suspend fun onMistakeDetected() {
+        discardLastStagedAndEvict()
+    }
+
+    suspend fun purgeWrongDetour(
+        returnedToComposite: String,
+        wrongPageComposite: String?
+    ) {
+        val stagedCut = staged.indexOfFirst { step ->
+            step.preCompositeScreen == returnedToComposite ||
+                (wrongPageComposite != null && step.postCompositeScreen == wrongPageComposite)
+        }
+        val removedFromStaged = if (stagedCut >= 0) {
+            staged.subList(stagedCut, staged.size).toList().also {
+                staged.subList(stagedCut, staged.size).clear()
+            }
+        } else {
+            emptyList()
+        }
+
+        val committedCut = committedThisRun.indexOfFirst { step ->
+            step.preCompositeScreen == returnedToComposite ||
+                (wrongPageComposite != null && step.postCompositeScreen == wrongPageComposite)
+        }
+        val removedFromCommitted = if (committedCut >= 0) {
+            committedThisRun.subList(committedCut, committedThisRun.size).toList().also {
+                committedThisRun.subList(committedCut, committedThisRun.size).clear()
+            }
+        } else {
+            emptyList()
+        }
+
+        for (bad in removedFromStaged + removedFromCommitted) {
+            bad.replayedCacheKey?.let { store?.removeEntry(it) }
+            store?.removeMatchingCandidate(bad.candidate)
+        }
+    }
+
+    suspend fun discardLastStagedAndEvict() {
+        if (staged.isNotEmpty()) {
+            val bad = staged.removeAt(staged.lastIndex)
+            bad.replayedCacheKey?.let { store?.removeEntry(it) }
+            store?.removeMatchingCandidate(bad.candidate)
+        }
+    }
+
+    suspend fun commitAllOnComplete() {
+        val remaining = staged.toList()
+        staged.clear()
+        for (step in remaining) {
+            committedThisRun.add(step)
+            if (step.replayedCacheKey != null) {
+                store?.incrementHit(step.replayedCacheKey)
+            } else {
+                store?.recordVerifiedSuccessSummary(step.candidate, step.afterSummary)
+            }
         }
     }
 }

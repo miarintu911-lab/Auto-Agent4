@@ -377,8 +377,13 @@ object AgentCoordinator {
                 }
 
                 var step = 1
+                val cacheTrail = VerifiedCacheTrail(actionCacheStore)
                 var pendingCacheCandidate: PendingCacheCandidate? = null
                 var lastReplayEntry: Pair<String, String>? = null
+                var launcherOpenedDrawer = false
+                var launcherTappedSearch = false
+                var launcherTypedSearch = false
+                var pendingLauncherStageTag: String? = null
                 var carromOfflineWaits = 0
                 var didSlideCarromThisStep = false
                 var movedStrikerThisTurn = false
@@ -430,35 +435,59 @@ object AgentCoordinator {
 
                     val currentSig = ActionCacheStore.computeScreenSignature(snapshot.nodes)
                     val currentCompositeScreen = "${snapshot.packageName}::$currentSig"
-                    var justEvictedStaleCache = false
-
-                    val prevReplay = lastReplayEntry
-                    if (prevReplay != null) {
-                        if (prevReplay.second == currentCompositeScreen) {
-                            // Cached tap did not advance the screen — evict stale entry and use live AI
-                            actionCacheStore?.removeEntry(prevReplay.first)
-                            justEvictedStaleCache = true
-                        } else {
-                            actionCacheStore?.incrementHit(prevReplay.first)
-                        }
-                        lastReplayEntry = null
-                    } else {
-                        val prevCandidate = pendingCacheCandidate
-                        if (prevCandidate != null) {
-                            actionCacheStore?.recordVerifiedSuccess(prevCandidate, snapshot)
-                            pendingCacheCandidate = null
-                        }
-                    }
-
-                    val interactiveNodeCount = snapshot.nodes.count { it.isClickable || it.isEditable }
                     val isCarromContext = CarromContextHelper.isCarromGoalOrApp(
                         goal = goal,
                         packageName = snapshot.packageName,
                         playbookTopicKey = activePlaybook?.topicKey
                     )
                     val selfPkg = appContext?.packageName ?: "com.example"
+                    val isOnLauncher = LauncherSearchHelper.isLauncherOrSearchScreen(snapshot.packageName, snapshot.nodes)
+                    val wasWrongApp = !isCarromContext &&
+                        LauncherSearchHelper.didLandInWrongApp(goal, snapshot.packageName, selfPkg)
+
+                    val prevReplay = lastReplayEntry
+                    val prevCandidate = pendingCacheCandidate
+                    val justEvictedStaleCache = prevReplay != null && prevReplay.second == currentCompositeScreen
+
+                    cacheTrail.onStepObserved(
+                        prevCandidate = prevCandidate,
+                        prevReplayedKey = prevReplay?.first,
+                        preCompositeScreen = prevCompositeScreen,
+                        currentCompositeScreen = currentCompositeScreen,
+                        currentPackage = snapshot.packageName,
+                        currentSignature = currentSig,
+                        prevActionType = prevNonWaitActionType,
+                        wasWrongPageOrApp = wasWrongApp
+                    )
+                    lastReplayEntry = null
+                    pendingCacheCandidate = null
+
+                    if (wasWrongApp || prevNonWaitActionType == AgentActionType.BACK) {
+                        launcherTappedSearch = false
+                        launcherTypedSearch = false
+                        if (wasWrongApp) {
+                            launcherOpenedDrawer = false
+                        }
+                    } else if (!isOnLauncher) {
+                        launcherOpenedDrawer = false
+                        launcherTappedSearch = false
+                        launcherTypedSearch = false
+                    } else {
+                        when (pendingLauncherStageTag) {
+                            "OPEN_APP_DRAWER" -> if (prevCompositeScreen != currentCompositeScreen || LauncherSearchHelper.isLikelyAppDrawerGrid(snapshot)) {
+                                launcherOpenedDrawer = true
+                            }
+                            "TAP_SEARCH_BAR", "TAP_SEARCH_PILL_FALLBACK" -> if (prevCompositeScreen != currentCompositeScreen || LauncherSearchHelper.findEditableSearchNode(snapshot.nodes) != null) {
+                                launcherTappedSearch = true
+                            }
+                            "TYPE_APP_NAME" -> launcherTypedSearch = true
+                        }
+                    }
+                    pendingLauncherStageTag = null
+
+                    val interactiveNodeCount = snapshot.nodes.count { it.isClickable || it.isEditable }
                     val isNonGameApp = snapshot.packageName == selfPkg ||
-                        snapshot.packageName.contains("launcher", ignoreCase = true) ||
+                        isOnLauncher ||
                         snapshot.packageName == "com.android.systemui"
                     val isLikelyCarromLobby = isCarromContext && (isNonGameApp || CarromContextHelper.isLikelyGameLobbyMenu(snapshot.nodes))
                     val isActiveCarromMatchScreen = isCarromContext && !isNonGameApp && !isLikelyCarromLobby
@@ -466,6 +495,7 @@ object AgentCoordinator {
                     val cacheMatch = if (
                         currentSettings.useZeroApiActionCache &&
                         !justEvictedStaleCache &&
+                        !wasWrongApp &&
                         !isActiveCarromMatchScreen
                     ) {
                         actionCacheStore?.findReplayMatch(goal, snapshot)
@@ -473,6 +503,7 @@ object AgentCoordinator {
                         null
                     }
                     var usedLocalCarromSolver = false
+                    var nextLauncherStageTag: String? = null
 
                     val chatObs = ChatTurnGuard.extractChatObservation(snapshot)
                     val currentContacts = _contacts.value
@@ -583,7 +614,39 @@ object AgentCoordinator {
                         CoinColor.WHITE
                     }
 
-                    val rawPlannedAction: PlannedAction = if (shouldZeroApiWaitForReply) {
+                    val launcherDecision = if (
+                        !wasWrongApp &&
+                        !shouldZeroApiWaitForReply &&
+                        cacheMatch == null &&
+                        !isActiveCarromMatchScreen &&
+                        isOnLauncher
+                    ) {
+                        LauncherSearchHelper.planNextLauncherSearchStep(
+                            goal = goal,
+                            snapshot = snapshot,
+                            alreadyOpenedDrawer = launcherOpenedDrawer,
+                            alreadyTappedSearch = launcherTappedSearch,
+                            alreadyTypedSearch = launcherTypedSearch
+                        )
+                    } else {
+                        null
+                    }
+
+                    val rawPlannedAction: PlannedAction = if (wasWrongApp) {
+                        snapshot.screenshot?.recycle()
+                        lastOutcomeHint = "[WRONG APP (${snapshot.packageName}) — purged wrong step from cache and pressing BACK to return to App Drawer Search.] $lastOutcomeHint"
+                        PlannedAction(
+                            actionType = AgentActionType.BACK,
+                            targetNodeId = null,
+                            x = null,
+                            y = null,
+                            textToType = null,
+                            waitSeconds = null,
+                            memoryNote = "Opened wrong app (${snapshot.packageName}); backing out to search exact app name.",
+                            reason = "Wrong app (${snapshot.packageName}) — pressing Back & purging wrong cache entry",
+                            requiresConfirmation = false
+                        )
+                    } else if (shouldZeroApiWaitForReply) {
                         snapshot.screenshot?.recycle()
                         val waitTarget = chatObs.peerName.ifBlank { activeAwaitingReply?.peerName.orEmpty() }.ifBlank { "recipient" }
                         PlannedAction(
@@ -604,6 +667,13 @@ object AgentCoordinator {
                         snapshot.screenshot?.recycle()
                         lastReplayEntry = cacheMatch.entry.cacheKey to currentCompositeScreen
                         cacheMatch.action
+                    } else if (launcherDecision != null) {
+                        carromOfflineWaits = 0
+                        didSlideCarromThisStep = false
+                        carromTurnMemory.resetTurn()
+                        snapshot.screenshot?.recycle()
+                        nextLauncherStageTag = launcherDecision.stageTag
+                        launcherDecision.action
                     } else {
                         didSlideCarromThisStep = false
                         val localCarromAction: PlannedAction? = if (
@@ -1126,6 +1196,9 @@ object AgentCoordinator {
                         workingMemory = plannedAction.memoryNote
                     }
 
+                    if (!plannedAction.foulOrMistakeLesson.isNullOrBlank()) {
+                        cacheTrail.onMistakeDetected()
+                    }
                     if (!plannedAction.learnedRule.isNullOrBlank() || !plannedAction.foulOrMistakeLesson.isNullOrBlank()) {
                         val topicKey = activePlaybook?.topicKey
                             ?: AgentKnowledgeStore.normalizeKey(goal.take(40))
@@ -1146,6 +1219,7 @@ object AgentCoordinator {
                     val targetSummary = buildTargetSummary(plannedAction, targetNode)
 
                     if (plannedAction.actionType == AgentActionType.COMPLETE) {
+                        cacheTrail.commitAllOnComplete()
                         appendTrace(
                             trace,
                             AgentStepLog(
@@ -1169,6 +1243,7 @@ object AgentCoordinator {
                     }
 
                     if (plannedAction.actionType == AgentActionType.FAIL) {
+                        cacheTrail.onMistakeDetected()
                         appendTrace(
                             trace,
                             AgentStepLog(
@@ -1366,7 +1441,10 @@ object AgentCoordinator {
                         }
                     }
 
-                    if (!usedLocalCarromSolver && cacheMatch == null && execResult.success && currentSettings.useZeroApiActionCache) {
+                    if (execResult.success && nextLauncherStageTag != null) {
+                        pendingLauncherStageTag = nextLauncherStageTag
+                    }
+                    if (!usedLocalCarromSolver && execResult.success && currentSettings.useZeroApiActionCache) {
                         pendingCacheCandidate = PendingCacheCandidate(
                             goal = goal,
                             packageName = snapshot.packageName,
@@ -1376,6 +1454,9 @@ object AgentCoordinator {
                             targetNode = targetNode,
                             hadConfirmedSafety = safetyCheck.needsConfirmation
                         )
+                        if (cacheMatch != null) {
+                            lastReplayEntry = cacheMatch.entry.cacheKey to currentCompositeScreen
+                        }
                     } else if (!execResult.success && cacheMatch != null) {
                         actionCacheStore?.removeEntry(cacheMatch.entry.cacheKey)
                         lastReplayEntry = null
