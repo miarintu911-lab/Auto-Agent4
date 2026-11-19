@@ -1,0 +1,6 @@
+{
+  "name": "TapPilot Agent",
+  "description": "Android native AI screen-tap automation agent powered by AccessibilityService and Gemini AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
