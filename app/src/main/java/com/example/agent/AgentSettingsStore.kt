@@ -41,6 +41,7 @@ class AgentSettingsStore(private val context: Context) {
         val USE_COORDINATE_GRID_OVERLAY = booleanPreferencesKey("use_coordinate_grid_overlay")
         val PREVENT_DOUBLE_TEXT = booleanPreferencesKey("prevent_double_text")
         val AUTO_REPLY_SAVED_CONTACTS_ONLY = booleanPreferencesKey("auto_reply_saved_contacts_only")
+        val REPLY_ONLY_ON_NOTIFICATIONS = booleanPreferencesKey("reply_only_on_message_notifications")
         val MAX_STEPS = intPreferencesKey("max_steps")
         val MONITOR_INTERVAL_SEC = intPreferencesKey("monitor_interval_sec")
         val USE_VISION = booleanPreferencesKey("use_vision_screenshot")
@@ -82,6 +83,7 @@ class AgentSettingsStore(private val context: Context) {
             prefs[Keys.USE_COORDINATE_GRID_OVERLAY] = updated.useCoordinateGridOverlay
             prefs[Keys.PREVENT_DOUBLE_TEXT] = updated.preventDoubleText
             prefs[Keys.AUTO_REPLY_SAVED_CONTACTS_ONLY] = updated.autoReplySavedContactsOnly
+            prefs[Keys.REPLY_ONLY_ON_NOTIFICATIONS] = updated.replyOnlyOnMessageNotifications
             prefs[Keys.MAX_STEPS] = updated.maxSteps.coerceIn(5, 50)
             prefs[Keys.MONITOR_INTERVAL_SEC] = updated.monitorIntervalSec.coerceIn(10, 300)
             prefs[Keys.USE_VISION] = updated.useVisionScreenshot
@@ -140,6 +142,7 @@ class AgentSettingsStore(private val context: Context) {
             useCoordinateGridOverlay = prefs[Keys.USE_COORDINATE_GRID_OVERLAY] ?: true,
             preventDoubleText = prefs[Keys.PREVENT_DOUBLE_TEXT] ?: true,
             autoReplySavedContactsOnly = prefs[Keys.AUTO_REPLY_SAVED_CONTACTS_ONLY] ?: false,
+            replyOnlyOnMessageNotifications = prefs[Keys.REPLY_ONLY_ON_NOTIFICATIONS] ?: true,
             maxSteps = (prefs[Keys.MAX_STEPS] ?: 20).coerceIn(5, 50),
             monitorIntervalSec = (prefs[Keys.MONITOR_INTERVAL_SEC] ?: 30).coerceIn(10, 300),
             useVisionScreenshot = prefs[Keys.USE_VISION] ?: true,

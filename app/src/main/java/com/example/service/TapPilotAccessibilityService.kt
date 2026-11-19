@@ -13,6 +13,7 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import com.example.agent.AgentCoordinator
+import com.example.agent.NotificationReplyHelper
 import com.example.agent.NotificationSignal
 import com.example.agent.PlannedAction
 import com.example.agent.UiSnapshot
@@ -49,15 +50,9 @@ class TapPilotAccessibilityService : AccessibilityService() {
             val sourcePkg = event.packageName?.toString().orEmpty()
             if (sourcePkg.isBlank() || sourcePkg == packageName) return
 
-            val notifText = extractNotificationText(event)
-            if (notifText.isNotBlank()) {
-                AgentCoordinator.onNotificationReceived(
-                    NotificationSignal(
-                        packageName = sourcePkg,
-                        text = notifText.take(240),
-                        timestampMs = System.currentTimeMillis()
-                    )
-                )
+            val signal = extractNotificationSignal(event, sourcePkg)
+            if (signal != null) {
+                AgentCoordinator.onNotificationReceived(signal)
             }
         }
     }
@@ -153,15 +148,40 @@ class TapPilotAccessibilityService : AccessibilityService() {
         return performGlobalAction(GLOBAL_ACTION_HOME)
     }
 
-    private fun extractNotificationText(event: AccessibilityEvent): String {
+    private fun extractNotificationSignal(
+        event: AccessibilityEvent,
+        sourcePkg: String
+    ): NotificationSignal? {
         val parcel = event.parcelableData
-        if (parcel is Notification) {
-            val title = parcel.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
-            val body = parcel.extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
-            val combined = listOf(title, body).filter { it.isNotBlank() }.joinToString(": ")
-            if (combined.isNotBlank()) return combined
+        val rawFallback = event.text?.joinToString(" ") { it?.toString().orEmpty() }?.trim().orEmpty()
+        return if (parcel is Notification) {
+            val isSummary = (parcel.flags and Notification.FLAG_GROUP_SUMMARY) != 0
+            val extras = parcel.extras
+            val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+            val conversationTitle = extras?.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()
+            val bigText = extras?.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+            val bodyText = bigText?.takeIf { it.isNotBlank() }
+                ?: extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+            NotificationReplyHelper.parseNotification(
+                packageName = sourcePkg,
+                title = title,
+                body = bodyText,
+                conversationTitle = conversationTitle,
+                rawFallbackText = rawFallback,
+                timestampMs = System.currentTimeMillis(),
+                isGroupSummary = isSummary
+            )
+        } else {
+            NotificationReplyHelper.parseNotification(
+                packageName = sourcePkg,
+                title = null,
+                body = null,
+                conversationTitle = null,
+                rawFallbackText = rawFallback,
+                timestampMs = System.currentTimeMillis(),
+                isGroupSummary = false
+            )
         }
-        return event.text?.joinToString(" ") { it?.toString().orEmpty() }?.trim().orEmpty()
     }
 
     private fun getScreenDimensions(): Pair<Int, Int> {

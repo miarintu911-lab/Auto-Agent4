@@ -19,6 +19,7 @@ object LauncherSearchHelper {
 
     private val appAliases: List<Pair<List<String>, String>> = listOf(
         listOf("facebook lite", "fb lite", "ফেসবুক লাইট") to "Lite",
+        listOf("wa business", "whatsapp business", "wa4b", "ডব্লিউএ বিজনেস", "হোয়াটসঅ্যাপ বিজনেস", "হোয়াটসঅ্যাপ বিজনেস") to "WA Business",
         listOf("whatsapp", "হোয়াটসঅ্যাপ", "হোয়াটসঅ্যাপ") to "WhatsApp",
         listOf("messenger", "মেসেঞ্জার") to "Messenger",
         listOf("facebook", "ফেসবুক") to "Facebook",
@@ -49,6 +50,7 @@ object LauncherSearchHelper {
     )
 
     private val expectedPackageHints: Map<String, List<String>> = mapOf(
+        "wa business" to listOf("com.whatsapp.w4b", "w4b"),
         "whatsapp" to listOf("whatsapp"),
         "lite" to listOf("facebook.lite", "lite"),
         "facebook" to listOf("facebook.katana", "facebook.lite", "facebook"),
@@ -193,13 +195,15 @@ object LauncherSearchHelper {
         candidates.firstOrNull {
             val lbl = it.displayLabel().trim().lowercase()
             it.isClickable && lbl.length <= targetLower.length + 14 &&
-                (lbl.startsWith(targetLower) || lbl.contains(targetLower))
+                (lbl.startsWith(targetLower) || lbl.contains(targetLower) ||
+                    (targetLower == "wa business" && lbl.contains("whatsapp business")))
         }?.let { return it }
 
         return candidates.firstOrNull {
             val lbl = it.displayLabel().trim().lowercase()
             lbl.length <= targetLower.length + 14 &&
-                (lbl.startsWith(targetLower) || lbl.contains(targetLower))
+                (lbl.startsWith(targetLower) || lbl.contains(targetLower) ||
+                    (targetLower == "wa business" && lbl.contains("whatsapp business")))
         }
     }
 
@@ -222,10 +226,11 @@ object LauncherSearchHelper {
         snapshot: UiSnapshot,
         alreadyOpenedDrawer: Boolean,
         alreadyTappedSearch: Boolean,
-        alreadyTypedSearch: Boolean
+        alreadyTypedSearch: Boolean,
+        targetAppOverride: String? = null
     ): LauncherSearchDecision? {
         if (!isLauncherOrSearchScreen(snapshot.packageName, snapshot.nodes)) return null
-        val targetAppName = extractTargetAppName(goal)
+        val targetAppName = targetAppOverride?.takeIf { it.isNotBlank() } ?: extractTargetAppName(goal)
 
         // Step A: Editable Search field is currently visible (e.g., Finder / App Drawer Search)
         val editNode = findEditableSearchNode(snapshot.nodes)
@@ -344,7 +349,12 @@ object LauncherSearchHelper {
         return null
     }
 
-    fun didLandInWrongApp(goal: String, currentPackage: String, selfPackage: String): Boolean {
+    fun didLandInWrongApp(
+        goal: String,
+        currentPackage: String,
+        selfPackage: String,
+        expectedAppOverride: String? = null
+    ): Boolean {
         if (currentPackage.isBlank() || currentPackage == "unknown" || currentPackage == selfPackage) {
             return false
         }
@@ -352,7 +362,9 @@ object LauncherSearchHelper {
         if (isLauncherOrSearchScreen(pkgLower, emptyList()) || pkgLower == "com.android.systemui") {
             return false
         }
-        val targetApp = extractTargetAppName(goal)?.lowercase() ?: return false
+        val targetApp = (expectedAppOverride?.takeIf { it.isNotBlank() } ?: extractTargetAppName(goal))
+            ?.lowercase()
+            ?: return false
         val hints = expectedPackageHints[targetApp] ?: listOf(targetApp.replace(" ", ""))
         if (hints.any { pkgLower.contains(it) }) {
             return false

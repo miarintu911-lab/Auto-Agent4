@@ -83,8 +83,10 @@
     <string name="settings_prevent_double_text_desc">Waits silently after messaging someone on Facebook, Messenger, or WhatsApp until they reply back—never spams follow-up messages.</string>
     <string name="settings_saved_contacts_only_label">Reply Only to Saved Contacts</string>
     <string name="settings_saved_contacts_only_desc">Skips unknown chats and only replies to people saved in your Relationship Contacts list below.</string>
+    <string name="settings_reply_only_notif_label">Reply Only on Message Notifications</string>
+    <string name="settings_reply_only_notif_desc">Waits silently with 0 API calls until a real message notification appears, opens only that sender ID, checks Relationship Contacts first, and replies politely if unsaved.</string>
     <string name="contacts_section_title">Relationship Contacts (WhatsApp &amp; FB)</string>
-    <string name="contacts_empty_hint">Save contacts by Name + App (WhatsApp/Facebook) + Relationship (বন্ধু, GF, ভাই, বোন, পরিবার, Business) so the agent chats in the right tone automatically.</string>
+    <string name="contacts_empty_hint">Save contacts by Name + App (WhatsApp / WA Business / Facebook) + Relationship (বন্ধু, GF, ভাই, বোন, পরিবার, Business) so the agent chats in the right tone automatically.</string>
     <string name="contacts_add_button">Add Contact</string>
     <string name="contacts_dialog_add_title">Add Relationship Contact</string>
     <string name="contacts_dialog_edit_title">Edit Relationship Contact</string>

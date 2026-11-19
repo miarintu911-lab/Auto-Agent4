@@ -377,6 +377,10 @@ object AgentCoordinator {
                 }
 
                 var step = 1
+                val runStartedMs = System.currentTimeMillis()
+                val pendingReplyQueue = ArrayDeque<NotificationReplyTarget>()
+                val handledNotificationKeys = mutableSetOf<String>()
+                var activeReplyTarget: NotificationReplyTarget? = null
                 val cacheTrail = VerifiedCacheTrail(actionCacheStore)
                 var pendingCacheCandidate: PendingCacheCandidate? = null
                 var lastReplayEntry: Pair<String, String>? = null
@@ -433,6 +437,60 @@ object AgentCoordinator {
                         recentNotifications.toList()
                     }
 
+                    val currentContacts = _contacts.value
+                    val isNotifDrivenAutoReply = NotificationReplyHelper.isNotificationDrivenAutoReplyGoal(
+                        goal = goal,
+                        mode = mode,
+                        settings = currentSettings
+                    )
+                    if (isNotifDrivenAutoReply) {
+                        val newlyArrived = NotificationReplyHelper.extractNewTargets(
+                            notifications = notificationsSnapshot,
+                            minTimestampMs = runStartedMs - 30_000L,
+                            handledNotificationKeys = handledNotificationKeys,
+                            alreadyQueuedOrActive = listOfNotNull(activeReplyTarget) + pendingReplyQueue
+                        )
+                        for (candidateTarget in newlyArrived) {
+                            if (currentSettings.autoReplySavedContactsOnly) {
+                                val savedMatch = ContactProfileStore.matchContactFromList(
+                                    contacts = currentContacts,
+                                    peerName = candidateTarget.senderName,
+                                    packageName = candidateTarget.packageName,
+                                    goal = goal,
+                                    recentNotifications = notificationsSnapshot
+                                )
+                                if (savedMatch == null) {
+                                    handledNotificationKeys.add(candidateTarget.targetKey)
+                                    lastOutcomeHint = "[Saved-Contacts-Only: skipped notification from unsaved sender '${candidateTarget.senderName}'.] $lastOutcomeHint"
+                                    continue
+                                }
+                            }
+                            pendingReplyQueue.addLast(candidateTarget)
+                        }
+                        if (activeReplyTarget == null && pendingReplyQueue.isNotEmpty()) {
+                            val nextTarget = pendingReplyQueue.removeFirst()
+                            activeReplyTarget = nextTarget
+                            val preCheckContact = ContactProfileStore.matchContactFromList(
+                                contacts = currentContacts,
+                                peerName = nextTarget.senderName,
+                                packageName = nextTarget.packageName,
+                                goal = goal,
+                                recentNotifications = notificationsSnapshot
+                            )
+                            val preCheckSummary = NotificationReplyHelper.buildRelationshipCheckSummary(
+                                target = nextTarget,
+                                matchedContact = preCheckContact
+                            )
+                            workingMemory = "[Notification: ${nextTarget.senderName} @ ${nextTarget.appDisplayName}] $preCheckSummary"
+                            lastOutcomeHint = "[INCOMING MESSAGE NOTIFICATION from '${nextTarget.senderName}' on ${nextTarget.appDisplayName}: \"${nextTarget.messageText.take(100)}\". $preCheckSummary] $lastOutcomeHint"
+                        }
+                    } else {
+                        activeReplyTarget = null
+                    }
+                    val currentActiveTarget = activeReplyTarget
+                    val targetAppOverride = currentActiveTarget?.appDisplayName
+                    val shouldWaitForIncomingNotification = isNotifDrivenAutoReply && currentActiveTarget == null
+
                     val currentSig = ActionCacheStore.computeScreenSignature(snapshot.nodes)
                     val currentCompositeScreen = "${snapshot.packageName}::$currentSig"
                     val isCarromContext = CarromContextHelper.isCarromGoalOrApp(
@@ -442,8 +500,22 @@ object AgentCoordinator {
                     )
                     val selfPkg = appContext?.packageName ?: "com.example"
                     val isOnLauncher = LauncherSearchHelper.isLauncherOrSearchScreen(snapshot.packageName, snapshot.nodes)
-                    val wasWrongApp = !isCarromContext &&
-                        LauncherSearchHelper.didLandInWrongApp(goal, snapshot.packageName, selfPkg)
+                    val isWrongNotifApp = currentActiveTarget != null &&
+                        ChatTurnGuard.isMessagingPackage(snapshot.packageName) &&
+                        !snapshot.packageName.equals(currentActiveTarget.packageName, ignoreCase = true) &&
+                        !NotificationReplyHelper.appSearchNameForPackage(snapshot.packageName).equals(
+                            currentActiveTarget.appDisplayName,
+                            ignoreCase = true
+                        )
+                    val wasWrongApp = !isCarromContext && (
+                        isWrongNotifApp ||
+                            LauncherSearchHelper.didLandInWrongApp(
+                                goal = goal,
+                                currentPackage = snapshot.packageName,
+                                selfPackage = selfPkg,
+                                expectedAppOverride = targetAppOverride
+                            )
+                        )
 
                     val prevReplay = lastReplayEntry
                     val prevCandidate = pendingCacheCandidate
@@ -492,10 +564,14 @@ object AgentCoordinator {
                     val isLikelyCarromLobby = isCarromContext && (isNonGameApp || CarromContextHelper.isLikelyGameLobbyMenu(snapshot.nodes))
                     val isActiveCarromMatchScreen = isCarromContext && !isNonGameApp && !isLikelyCarromLobby
 
+                    val chatObs = ChatTurnGuard.extractChatObservation(snapshot)
+                    val disableCacheForSpecificSender = currentActiveTarget != null && chatObs.isMessagingApp
                     val cacheMatch = if (
                         currentSettings.useZeroApiActionCache &&
                         !justEvictedStaleCache &&
                         !wasWrongApp &&
+                        !shouldWaitForIncomingNotification &&
+                        !disableCacheForSpecificSender &&
                         !isActiveCarromMatchScreen
                     ) {
                         actionCacheStore?.findReplayMatch(goal, snapshot)
@@ -505,14 +581,22 @@ object AgentCoordinator {
                     var usedLocalCarromSolver = false
                     var nextLauncherStageTag: String? = null
 
-                    val chatObs = ChatTurnGuard.extractChatObservation(snapshot)
-                    val currentContacts = _contacts.value
+                    val lookupPeerName = chatObs.peerName.ifBlank { currentActiveTarget?.senderName.orEmpty() }
+                    val lookupPkg = if (chatObs.isMessagingApp) {
+                        snapshot.packageName
+                    } else {
+                        currentActiveTarget?.packageName ?: snapshot.packageName
+                    }
                     val matchedContact = ContactProfileStore.matchContactFromList(
                         contacts = currentContacts,
-                        peerName = chatObs.peerName,
-                        packageName = snapshot.packageName,
+                        peerName = lookupPeerName,
+                        packageName = lookupPkg,
                         goal = goal,
                         recentNotifications = notificationsSnapshot
+                    )
+                    val relationshipCheckSummary = NotificationReplyHelper.buildRelationshipCheckSummary(
+                        target = currentActiveTarget,
+                        matchedContact = matchedContact
                     )
                     val savedContactsSummary = ContactProfileStore.formatRosterSummary(currentContacts)
 
@@ -579,7 +663,20 @@ object AgentCoordinator {
                     }
 
                     val chatGuardHint = buildString {
+                        if (currentActiveTarget != null) {
+                            append("ACTIVE NOTIFICATION TARGET LOCK: Open ONLY sender '${currentActiveTarget.senderName}' inside '${currentActiveTarget.appDisplayName}' (incoming message: \"${currentActiveTarget.messageText.take(120)}\"). Do NOT open or reply to any other chat.")
+                            if (chatObs.isMessagingApp && chatObs.inChatThread && chatObs.peerName.isNotBlank() &&
+                                !NotificationReplyHelper.matchesTargetPeer(chatObs.peerName, currentActiveTarget.senderName)
+                            ) {
+                                append(" | WRONG CHAT THREAD OPEN ('${chatObs.peerName}' != '${currentActiveTarget.senderName}'): Press BACK immediately and open '${currentActiveTarget.senderName}'.")
+                            }
+                        }
+                        if (relationshipCheckSummary.isNotBlank()) {
+                            if (isNotEmpty()) append(" | ")
+                            append(relationshipCheckSummary)
+                        }
                         if (chatObs.isMessagingApp) {
+                            if (isNotEmpty()) append(" | ")
                             append("App=${snapshot.packageName}, InChatThread=${chatObs.inChatThread}")
                             if (chatObs.peerName.isNotBlank()) {
                                 append(", ActiveChatPeer='${chatObs.peerName}'")
@@ -615,6 +712,7 @@ object AgentCoordinator {
                     }
 
                     val launcherDecision = if (
+                        !shouldWaitForIncomingNotification &&
                         !wasWrongApp &&
                         !shouldZeroApiWaitForReply &&
                         cacheMatch == null &&
@@ -626,13 +724,27 @@ object AgentCoordinator {
                             snapshot = snapshot,
                             alreadyOpenedDrawer = launcherOpenedDrawer,
                             alreadyTappedSearch = launcherTappedSearch,
-                            alreadyTypedSearch = launcherTypedSearch
+                            alreadyTypedSearch = launcherTypedSearch,
+                            targetAppOverride = targetAppOverride
                         )
                     } else {
                         null
                     }
 
-                    val rawPlannedAction: PlannedAction = if (wasWrongApp) {
+                    val rawPlannedAction: PlannedAction = if (shouldWaitForIncomingNotification) {
+                        snapshot.screenshot?.recycle()
+                        PlannedAction(
+                            actionType = AgentActionType.WAIT,
+                            targetNodeId = null,
+                            x = null,
+                            y = null,
+                            textToType = null,
+                            waitSeconds = currentSettings.monitorIntervalSec,
+                            memoryNote = null,
+                            reason = "Waiting for incoming message notification (will open specific sender ID when message arrives)...",
+                            requiresConfirmation = false
+                        )
+                    } else if (wasWrongApp) {
                         snapshot.screenshot?.recycle()
                         lastOutcomeHint = "[WRONG APP (${snapshot.packageName}) — purged wrong step from cache and pressing BACK to return to App Drawer Search.] $lastOutcomeHint"
                         PlannedAction(
@@ -1149,6 +1261,25 @@ object AgentCoordinator {
                         snapshot.nodes.firstOrNull { it.id == id }
                     }
                     val plannedAction: PlannedAction = when {
+                        currentActiveTarget != null &&
+                            chatObs.isMessagingApp &&
+                            chatObs.inChatThread &&
+                            chatObs.peerName.isNotBlank() &&
+                            !NotificationReplyHelper.matchesTargetPeer(chatObs.peerName, currentActiveTarget.senderName) &&
+                            (ChatTurnGuard.isChatSendAction(rawPlannedAction, rawTargetNode, snapshot) ||
+                                rawPlannedAction.actionType == AgentActionType.INPUT_TEXT) -> {
+                            PlannedAction(
+                                actionType = AgentActionType.BACK,
+                                targetNodeId = null,
+                                x = null,
+                                y = null,
+                                textToType = null,
+                                waitSeconds = null,
+                                memoryNote = rawPlannedAction.memoryNote,
+                                reason = "Wrong chat thread '${chatObs.peerName}' — backing out to open notification sender '${currentActiveTarget.senderName}'.",
+                                requiresConfirmation = false
+                            )
+                        }
                         currentSettings.autoReplySavedContactsOnly &&
                             chatObs.isMessagingApp &&
                             chatObs.inChatThread &&
@@ -1438,6 +1569,14 @@ object AgentCoordinator {
                                 transcriptSignatureAtSend = chatObs.transcriptSignature,
                                 sentAtMs = System.currentTimeMillis()
                             )
+                            if (currentActiveTarget != null &&
+                                (!chatObs.inChatThread || chatObs.peerName.isBlank() ||
+                                    NotificationReplyHelper.matchesTargetPeer(chatObs.peerName, currentActiveTarget.senderName))
+                            ) {
+                                handledNotificationKeys.add(currentActiveTarget.targetKey)
+                                activeReplyTarget = null
+                                lastOutcomeHint = "[REPLIED to notification from '${currentActiveTarget.senderName}' — waiting for next incoming message notification.] $lastOutcomeHint"
+                            }
                         }
                     }
 

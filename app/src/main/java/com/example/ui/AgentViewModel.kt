@@ -67,12 +67,12 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         ),
         GoalPreset(
             title = "Smart Relationship Chat",
-            prompt = "Open Messenger or WhatsApp, check chats for saved contacts, reply naturally matching each contact's relationship tone (Friend, GF, Brother, Sister, Family, or Business), and after sending a message ALWAYS wait for their reply without sending repeat follow-ups.",
+            prompt = "Auto-reply ONLY when a real incoming message notification shows on WhatsApp, WA Business, or Messenger: check Relationship Contacts in this app first, open only that notification's sender ID, reply strictly in the saved relationship tone (or politely and warmly if no relationship is saved), and wait silently until the next notification.",
             suggestedMode = AgentExecutionMode.CONTINUOUS_MONITOR
         ),
         GoalPreset(
-            title = "Auto-Reply Messenger",
-            prompt = "Monitor incoming Messenger notifications, open new chats, reply politely about product availability and price, and continue watching.",
+            title = "Auto-Reply Notification",
+            prompt = "নোটিফিকেশনে মেসেজ আসলে শুধু সেই নির্দিষ্ট আইডিতে ঢুকে অটো রিপ্লাই দাও: আগে এ্যাপের Relationship Contacts চেক করো—রিলেশনশিপ এ্যাড করা থাকলে সেই অনুযায়ী কথা বলো, আর না থাকলে সুন্দর ও ভদ্রভাবে কথা বলো।",
             suggestedMode = AgentExecutionMode.CONTINUOUS_MONITOR
         ),
         GoalPreset(

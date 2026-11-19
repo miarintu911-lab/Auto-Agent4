@@ -105,7 +105,9 @@ class ContactProfileStore(context: Context) {
                 if (!platformMatches) continue
 
                 val platformSpecificityBonus = when (contact.platform) {
-                    ChatPlatform.WHATSAPP, ChatPlatform.FACEBOOK_MESSENGER -> 3
+                    ChatPlatform.WHATSAPP,
+                    ChatPlatform.WHATSAPP_BUSINESS,
+                    ChatPlatform.FACEBOOK_MESSENGER -> 3
                     ChatPlatform.BOTH -> 2
                     ChatPlatform.OTHER -> 1
                 }

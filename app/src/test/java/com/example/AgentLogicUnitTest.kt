@@ -1878,6 +1878,183 @@ class AgentLogicUnitTest {
             )
         )
     }
+
+    @Test
+    fun `wa business relationship platform matches com whatsapp w4b and isolates from personal whatsapp`() {
+        val clientWab = com.example.agent.ContactProfile(
+            id = "wb1",
+            name = "Arif Client",
+            platform = com.example.agent.ChatPlatform.WHATSAPP_BUSINESS,
+            relationship = com.example.agent.RelationshipType.BUSINESS,
+            customStyleNote = "Quote wholesale rate",
+            autoReplyEnabled = true,
+            createdAtMs = 4000L
+        )
+        val personalFriend = com.example.agent.ContactProfile(
+            id = "wa1",
+            name = "Arif Client",
+            platform = com.example.agent.ChatPlatform.WHATSAPP,
+            relationship = com.example.agent.RelationshipType.FRIEND,
+            customStyleNote = "Casual friend tone",
+            autoReplyEnabled = true,
+            createdAtMs = 3000L
+        )
+        val contacts = listOf(clientWab, personalFriend)
+
+        val matchedW4b = com.example.agent.ContactProfileStore.matchContactFromList(
+            contacts = contacts,
+            peerName = "Arif Client",
+            packageName = "com.whatsapp.w4b",
+            goal = "WA Business এ ক্লায়েন্টকে রিপ্লাই দাও",
+            recentNotifications = emptyList()
+        )
+        assertEquals("wb1", matchedW4b?.id)
+        assertEquals(com.example.agent.RelationshipType.BUSINESS, matchedW4b?.relationship)
+
+        val matchedPersonal = com.example.agent.ContactProfileStore.matchContactFromList(
+            contacts = contacts,
+            peerName = "Arif Client",
+            packageName = "com.whatsapp",
+            goal = "WhatsApp এ রিপ্লাই দাও",
+            recentNotifications = emptyList()
+        )
+        assertEquals("wa1", matchedPersonal?.id)
+        assertEquals(com.example.agent.RelationshipType.FRIEND, matchedPersonal?.relationship)
+
+        assertTrue(com.example.agent.ChatPlatform.BOTH.matchesPackage("com.whatsapp.w4b"))
+        assertEquals("WA Business", com.example.agent.LauncherSearchHelper.extractTargetAppName("WA Business এ গিয়ে মেসেজ দেখো"))
+        assertEquals("WA Business", com.example.agent.LauncherSearchHelper.extractTargetAppName("হোয়াটসঅ্যাপ বিজনেস ওপেন করো"))
+        assertTrue(
+            com.example.agent.LauncherSearchHelper.didLandInWrongApp(
+                goal = "WA Business এ গিয়ে ক্লায়েন্টকে রিপ্লাই দাও",
+                currentPackage = "com.whatsapp",
+                selfPackage = "com.example"
+            )
+        )
+        assertFalse(
+            com.example.agent.LauncherSearchHelper.didLandInWrongApp(
+                goal = "WA Business এ গিয়ে ক্লায়েন্টকে রিপ্লাই দাও",
+                currentPackage = "com.whatsapp.w4b",
+                selfPackage = "com.example"
+            )
+        )
+    }
+
+    @Test
+    fun `notification auto reply filters noise extracts specific sender ID and checks relationship first`() {
+        val groupSummary = com.example.agent.NotificationReplyHelper.parseNotification(
+            packageName = "com.whatsapp",
+            title = "WhatsApp",
+            body = "2 new messages from 2 chats",
+            conversationTitle = null,
+            rawFallbackText = "WhatsApp: 2 new messages from 2 chats",
+            timestampMs = 10_000L,
+            isGroupSummary = true
+        )
+        org.junit.Assert.assertNull(groupSummary)
+
+        val syncingNotif = com.example.agent.NotificationReplyHelper.parseNotification(
+            packageName = "com.whatsapp.w4b",
+            title = "WA Business",
+            body = "Checking for new messages",
+            conversationTitle = null,
+            rawFallbackText = "Checking for new messages",
+            timestampMs = 10_100L,
+            isGroupSummary = false
+        )
+        org.junit.Assert.assertNull(syncingNotif)
+
+        val realWab = com.example.agent.NotificationReplyHelper.parseNotification(
+            packageName = "com.whatsapp.w4b",
+            title = "Arif Client (2 messages)",
+            body = "Vai 100 piece er dam koto?",
+            conversationTitle = null,
+            rawFallbackText = "",
+            timestampMs = 12_000L,
+            isGroupSummary = false
+        )
+        org.junit.Assert.assertNotNull(realWab)
+        assertEquals("Arif Client", realWab!!.senderName)
+        assertEquals("Vai 100 piece er dam koto?", realWab.messageBody)
+
+        val targets = com.example.agent.NotificationReplyHelper.extractNewTargets(
+            notifications = listOf(realWab),
+            minTimestampMs = 10_000L,
+            handledNotificationKeys = emptySet(),
+            alreadyQueuedOrActive = emptyList()
+        )
+        assertEquals(1, targets.size)
+        assertEquals("WA Business", targets.first().appDisplayName)
+        assertEquals("Arif Client", targets.first().senderName)
+        assertEquals("WA Business", com.example.agent.NotificationReplyHelper.appSearchNameForPackage("com.whatsapp.w4b"))
+        assertEquals("WhatsApp", com.example.agent.NotificationReplyHelper.appSearchNameForPackage("com.whatsapp"))
+
+        val savedClient = com.example.agent.ContactProfile(
+            id = "c_wab",
+            name = "Arif Client",
+            platform = com.example.agent.ChatPlatform.WHATSAPP_BUSINESS,
+            relationship = com.example.agent.RelationshipType.BUSINESS,
+            customStyleNote = "Quote wholesale rate",
+            autoReplyEnabled = true,
+            createdAtMs = 5000L
+        )
+        val savedMatch = com.example.agent.ContactProfileStore.matchContactFromList(
+            contacts = listOf(savedClient),
+            peerName = targets.first().senderName,
+            packageName = targets.first().packageName,
+            goal = "auto মেসেজ আসলে রিপ্লাই দিবে",
+            recentNotifications = listOf(realWab)
+        )
+        val savedSummary = com.example.agent.NotificationReplyHelper.buildRelationshipCheckSummary(
+            target = targets.first(),
+            matchedContact = savedMatch
+        )
+        assertTrue(savedSummary.contains("Business"))
+        assertTrue(savedSummary.contains("Quote wholesale rate"))
+
+        val unknownTarget = targets.first().copy(senderName = "Unknown Buyer")
+        val unsavedMatch = com.example.agent.ContactProfileStore.matchContactFromList(
+            contacts = listOf(savedClient),
+            peerName = unknownTarget.senderName,
+            packageName = unknownTarget.packageName,
+            goal = "auto মেসেজ আসলে রিপ্লাই দিবে",
+            recentNotifications = emptyList()
+        )
+        org.junit.Assert.assertNull(unsavedMatch)
+        val politeSummary = com.example.agent.NotificationReplyHelper.buildRelationshipCheckSummary(
+            target = unknownTarget,
+            matchedContact = null
+        )
+        assertTrue(politeSummary.contains("No relationship saved"))
+        assertTrue(politeSummary.contains("সুন্দর ও ভদ্রভাবে কথা বলো"))
+
+        val defaultSettings = AgentSettings(replyOnlyOnMessageNotifications = true)
+        assertTrue(
+            com.example.agent.NotificationReplyHelper.isNotificationDrivenAutoReplyGoal(
+                goal = "auto মেসেজ আসলে রিপ্লাই দিবে শুধু নোটিফিকেশনে",
+                mode = com.example.agent.AgentExecutionMode.CONTINUOUS_MONITOR,
+                settings = defaultSettings
+            )
+        )
+        assertFalse(
+            com.example.agent.NotificationReplyHelper.isNotificationDrivenAutoReplyGoal(
+                goal = "Open Carrom and play freestyle",
+                mode = com.example.agent.AgentExecutionMode.CONTINUOUS_MONITOR,
+                settings = defaultSettings
+            )
+        )
+        assertFalse(
+            com.example.agent.NotificationReplyHelper.isNotificationDrivenAutoReplyGoal(
+                goal = "auto মেসেজ আসলে রিপ্লাই দিবে",
+                mode = com.example.agent.AgentExecutionMode.CONTINUOUS_MONITOR,
+                settings = AgentSettings(replyOnlyOnMessageNotifications = false)
+            )
+        )
+
+        assertTrue(com.example.agent.NotificationReplyHelper.matchesTargetPeer("Arif Client", "Arif Client"))
+        assertFalse(com.example.agent.NotificationReplyHelper.matchesTargetPeer("Karim Vai", "Arif Client"))
+    }
 }
+
 
 

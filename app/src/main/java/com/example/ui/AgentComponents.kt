@@ -1876,6 +1876,16 @@ fun AgentSettingsSheet(
             )
 
             SettingSwitchRow(
+                title = stringResource(R.string.settings_reply_only_notif_label),
+                subtitle = stringResource(R.string.settings_reply_only_notif_desc),
+                checked = settings.replyOnlyOnMessageNotifications,
+                testTag = "switch_reply_only_on_notifications",
+                onCheckedChange = { enabled ->
+                    onUpdate { it.copy(replyOnlyOnMessageNotifications = enabled) }
+                }
+            )
+
+            SettingSwitchRow(
                 title = stringResource(R.string.settings_safety_mode_label),
                 subtitle = stringResource(R.string.settings_safety_mode_desc),
                 checked = settings.safetyPolicyMode == SafetyPolicyMode.PAYMENT_ONLY,

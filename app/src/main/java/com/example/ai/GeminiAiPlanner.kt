@@ -59,7 +59,11 @@ class GeminiAiPlanner {
         9. Set requiresConfirmation = true ONLY for money payments, financial transfers, final checkout/place-order confirmation, card/PIN/OTP entry, or factory reset.
         10. In CONTINUOUS_MONITOR mode, return WAIT with waitSeconds (e.g. 15..90) when idling between notifications or checks.
         11. ANTI-DOUBLE-TEXT / NO-SPAM CHAT RULE (CRITICAL): In Messenger, Facebook, WhatsApp, Instagram, or Telegram, NEVER send another message (`INPUT_TEXT` or `Send`) if your previous message is still the latest bubble or the recipient has NOT replied yet! Do NOT send repeated follow-ups like "কি খবর বন্ধু" or "hello?". Instead, return `WAIT` (`waitSeconds = 25..45`) until an incoming reply or new notification arrives.
-        12. RELATIONSHIP PERSONA RULE: If a `MATCHED CONTACT PROFILE` is present (e.g., Friend/বন্ধু, GF/জিএফ, Brother/ভাই, Sister/বোন, Family/পরিবার, Business), strictly adopt that exact tone, Bengali/Banglish warmth, honorifics, and custom style note. Use `SAVED CONTACTS ROSTER` to identify saved contacts by Name + Platform (WhatsApp / Facebook) even when browsing an inbox list.
+        12. NOTIFICATION-ONLY AUTO-REPLY & RELATIONSHIP PERSONA RULE:
+           - When `ACTIVE NOTIFICATION TARGET LOCK` is shown in `LIVE CHAT & TURN-TAKING STATUS`, you MUST open ONLY that exact sender ID inside that exact app — NEVER open other random chats.
+           - ALWAYS check `MATCHED CONTACT & RELATIONSHIP PERSONA` and `SAVED CONTACTS ROSTER` (WhatsApp / WA Business / Facebook / Messenger) FIRST:
+             * If a relationship IS saved for that sender + app (Friend/বন্ধু, GF/জিএফ, Brother/ভাই, Sister/বোন, Family/পরিবার, Business), strictly adopt that saved relationship tone, honorifics, and custom note.
+             * If NO relationship is saved (`NO MATCH` and Saved-Contacts-Only is off), speak warmly, politely, respectfully, and nicely (সুন্দর, মিষ্টি ও ভদ্রভাবে কথা বলো) according to what they wrote!
         13. STRONGER ACTION RECOVERY: Never repeat the exact same failing TAP/DRAG. If `PREVIOUS ACTION RESULT` warns `[NO SCREEN CHANGE]`, immediately change strategy: pick the parent container/text node, use visual coordinates from the screenshot, scroll slightly, slide left/right, or press `BACK`.
     """.trimIndent()
 
@@ -534,7 +538,7 @@ class GeminiAiPlanner {
             MATCHED CONTACT & RELATIONSHIP PERSONA:
             $contactProfileSection
 
-            SAVED CONTACTS ROSTER (WhatsApp / Facebook):
+            SAVED CONTACTS ROSTER (WhatsApp / WA Business / Facebook):
             $rosterSection
 $chatGuardSection$carromMemorySection
             PERSISTENT PLAYBOOK (RESEARCHED & LEARNED ACROSS SESSIONS):

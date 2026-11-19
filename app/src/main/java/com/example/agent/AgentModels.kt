@@ -153,7 +153,9 @@ data class UiSnapshot(
 data class NotificationSignal(
     val packageName: String,
     val text: String,
-    val timestampMs: Long
+    val timestampMs: Long,
+    val senderName: String = "",
+    val messageBody: String = ""
 )
 
 data class PlannedAction(
@@ -207,18 +209,22 @@ data class TaskPlaybook(
 
 enum class ChatPlatform(val label: String) {
     WHATSAPP("WhatsApp"),
+    WHATSAPP_BUSINESS("WA Business"),
     FACEBOOK_MESSENGER("Facebook / Messenger"),
     BOTH("WhatsApp + Facebook"),
     OTHER("Other App");
 
     fun matchesPackage(packageName: String): Boolean {
         val pkg = packageName.lowercase()
-        val isWa = pkg.contains("whatsapp")
+        val isWaBusiness = pkg == "com.whatsapp.w4b" || pkg.contains("w4b") || pkg.contains("whatsapp.business")
+        val isWaPersonal = pkg == "com.whatsapp" || (pkg.contains("whatsapp") && !isWaBusiness)
+        val isWaAny = isWaPersonal || isWaBusiness
         val isFb = pkg.contains("facebook") || pkg.contains("orca") || pkg.contains("mlite")
         return when (this) {
-            WHATSAPP -> isWa
+            WHATSAPP -> isWaPersonal
+            WHATSAPP_BUSINESS -> isWaBusiness
             FACEBOOK_MESSENGER -> isFb
-            BOTH -> isWa || isFb || pkg.isBlank()
+            BOTH -> isWaAny || isFb || pkg.isBlank()
             OTHER -> true
         }
     }
@@ -392,6 +398,7 @@ data class AgentSettings(
     val useCoordinateGridOverlay: Boolean = true,
     val preventDoubleText: Boolean = true,
     val autoReplySavedContactsOnly: Boolean = false,
+    val replyOnlyOnMessageNotifications: Boolean = true,
     val maxSteps: Int = 20,
     val monitorIntervalSec: Int = 30,
     val useVisionScreenshot: Boolean = true,
